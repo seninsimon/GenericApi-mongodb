@@ -1,9 +1,9 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-
 import connectDB from "./config/db.js";
-import tableRoutes from "./routes/tableRoutes.js"
+import tableRoutes from "./routes/tableRoutes.js";
+import schemaRoutes from "./routes/schemaRoutes.js";
 
 dotenv.config();
 
@@ -15,6 +15,7 @@ app.use(express.json());
 connectDB();
 
 app.use("/api", tableRoutes);
+app.use("/api", schemaRoutes);
 
 const PORT = process.env.PORT || 5000;
 

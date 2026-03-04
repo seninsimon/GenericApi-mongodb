@@ -1,6 +1,7 @@
 import {
   deleteCollectionData,
   getCollectionData,
+  getSingleCollecitonData,
   insertCollectionData,
   updateCollectionData,
 } from "../repo/tableRepository.js";
@@ -21,3 +22,8 @@ export const modifyTableData = (collection, id, payload) => {
 export const removeTableData = (collection, id) => {
   return deleteCollectionData(collection, id);
 };
+
+
+export const fectchSingleTableData = async (collection, id) => {
+  return await getSingleCollecitonData(collection, id);
+}

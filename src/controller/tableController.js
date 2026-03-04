@@ -1,4 +1,10 @@
-import { createTableData, fetchTableData, modifyTableData, removeTableData } from "../services/tableService.js";
+import {
+  createTableData,
+  fectchSingleTableData,
+  fetchTableData,
+  modifyTableData,
+  removeTableData,
+} from "../services/tableService.js";
 
 export const getTableData = async (req, res) => {
   try {
@@ -22,39 +28,66 @@ export const insertTableData = async (req, res) => {
 
     const data = await createTableData(collection, payload);
 
-
     res.json({
       message: "Data inserted successfully",
-      data
+      data,
     });
   } catch (error) {
     console.error(error);
     res.status(500).json({
-      message: "Failed to insert data"
+      message: "Failed to insert data",
     });
   }
 };
 
-
 export const updateTableData = async (req, res) => {
-  const { collection, id } = req.params;
-  const payload = req.body;
+  try {
+    const { collection, id } = req.params;
+    const payload = req.body;
 
-  const result = await modifyTableData(collection, id, payload);
+    const result = await modifyTableData(collection, id, payload);
 
-  res.json({
-    message: "Updated successfully",
-    result
-  });
+    res.json({
+      message: "Updated successfully",
+      result,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      message: "Failed to update data",
+    });
+  }
 };
 
 export const deleteTableData = async (req, res) => {
-  const { collection, id } = req.params;
+  try {
+    const { collection, id } = req.params;
 
-  const result = await removeTableData(collection, id);
+    const result = await removeTableData(collection, id);
 
-  res.json({
-    message: "Deleted successfully",
-    result
-  });
+    res.json({
+      message: "Deleted successfully",
+      result,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      message: "Failed to delete data",
+    });
+  }
+};
+
+export const  getSingleTableData = async (req, res) => {
+  try {
+    const { collection, id } = req.params;
+
+    const data = await fectchSingleTableData(collection, id);
+
+    res.json(data);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      message: "Failed to fetch single table data",
+    });
+  }
 };
