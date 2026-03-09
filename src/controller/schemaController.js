@@ -1,3 +1,4 @@
+import { updateColumnInSchema } from "../repo/schemaRepository.js";
 import {
   createTable,
   fetchTables,
@@ -50,4 +51,25 @@ export const deleteColumnFromTable = async (req, res) => {
     message: "Column removed",
     data,
   });
+};
+
+
+export const updateColumn = async (req, res) => {
+  try {
+    const { table, name } = req.params;
+    const payload = req.body;
+
+    const result = await updateColumnInSchema(table, name, payload);
+
+    res.json({
+      message: "Column updated successfully",
+      result,
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      message: "Failed to update column",
+    });
+  }
 };

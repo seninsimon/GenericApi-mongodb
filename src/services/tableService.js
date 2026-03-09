@@ -1,13 +1,13 @@
 import {
   deleteCollectionData,
   getCollectionData,
-  getSingleCollecitonData,
+  getSingleCollectionData,
   insertCollectionData,
   updateCollectionData,
 } from "../repo/tableRepository.js";
 
-export const fetchTableData = async (collectionName) => {
-  const data = await getCollectionData(collectionName);
+export const fetchTableData = async (collectionName, options) => {
+  const data = await getCollectionData(collectionName, options);
   return data;
 };
 
@@ -23,7 +23,6 @@ export const removeTableData = (collection, id) => {
   return deleteCollectionData(collection, id);
 };
 
-
 export const fectchSingleTableData = async (collection, id) => {
-  return await getSingleCollecitonData(collection, id);
-}
+  return await getSingleCollectionData(collection, id);
+};

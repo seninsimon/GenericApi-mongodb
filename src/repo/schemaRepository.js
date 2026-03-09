@@ -25,3 +25,22 @@ export const deleteColumn = async (tableName, columnName) => {
     { $pull: { columns: { name: columnName } } }
   );
 };
+
+
+export const updateColumnInSchema = async (tableName, columnName, payload) => {
+
+  return await TableSchema.updateOne(
+    {
+      tableName,
+      "columns.name": columnName,
+    },
+    {
+      $set: {
+        "columns.$.label": payload.label,
+        "columns.$.type": payload.type,
+        "columns.$.showInTable": payload.showInTable,
+      },
+    }
+  );
+
+};
