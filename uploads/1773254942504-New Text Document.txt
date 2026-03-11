@@ -1,0 +1,36 @@
+SELECT *
+FROM public."fn_CalculateAdditionalCharges"(
+  '',
+  '',
+  '',
+  '{
+    "stmDocNo": "1001",
+    "slmDocNo": "1006",
+    "supDocNo": "1012",
+    "isPalletized": false,
+    "isNonStackable": true,
+    "enqDetails": [
+      {
+        "docSrNo": 1,
+        "quantity": 1,
+        "chargeableWeight": 78,
+        "actWeightInKg": 80,
+        "lengthInCm": 160,
+        "breadthInCm": 60,
+        "heightInCm": 170,
+        "girth": 450
+      }
+    ]
+  }'::jsonb,
+  '1012'
+);
+
+
+got omx
+
+
+//////////////////////////
+
+
+DB_OCIUZ_MERIDIAN_LIVE_MIGRATION
+13.234.246.205
