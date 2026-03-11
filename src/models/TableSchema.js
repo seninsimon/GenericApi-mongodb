@@ -44,6 +44,8 @@ const columnSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+
+  displayField: String,
 });
 
 const tableSchema = new mongoose.Schema(

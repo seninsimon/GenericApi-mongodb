@@ -20,7 +20,6 @@ export const getTableData = async (req, res) => {
       order = "desc",
     } = req.query;
 
-    // Get schema
     const schema = await TableSchema.findOne({ tableName: collection });
 
     if (!schema) {
@@ -30,10 +29,9 @@ export const getTableData = async (req, res) => {
     const visibleColumns = schema.columns.filter((col) => col.showInTable);
 
     const relationColumns = schema.columns.filter(
-      (col) => col.type === "relation" && col.ref
+      (col) => col.type === "relation" && col.ref,
     );
 
-    // Fetch table rows
     const result = await fetchTableData(collection, {
       page: Number(page),
       limit: Number(limit),
@@ -44,9 +42,6 @@ export const getTableData = async (req, res) => {
 
     const rows = result.data;
 
-    // ---------------------------
-    // Collect relation IDs
-    // ---------------------------
     const relationIds = {};
 
     for (const relation of relationColumns) {
@@ -67,36 +62,31 @@ export const getTableData = async (req, res) => {
       }
     }
 
-    // ---------------------------
-    // Fetch relation data
-    // ---------------------------
     const relationMaps = {};
 
     for (const relation of relationColumns) {
       const ids = Array.from(relationIds[relation.name]);
-
       if (!ids.length) continue;
-
       const objectIds = ids.map((id) => new mongoose.Types.ObjectId(id));
+      const refCollection = relation.ref;
+      const refSchema = await TableSchema.findOne({ tableName: refCollection });
+      const displayColumn =
+        refSchema?.columns.find((c) => c.showInTable)?.name || "_id";
 
       const refData = await mongoose.connection
-        .collection(relation.ref)
+        .collection(refCollection)
         .find({ _id: { $in: objectIds } })
         .toArray();
 
       const map = {};
 
       for (const item of refData) {
-        map[item._id.toString()] =
-          item.name || item.title || item.label || item._id.toString();
+        map[item._id.toString()] = item[displayColumn] || item._id.toString();
       }
 
       relationMaps[relation.name] = map;
     }
 
-    // ---------------------------
-    // Build response rows
-    // ---------------------------
     const filteredData = rows.map((row) => {
       const filteredRow = { _id: row._id };
 
@@ -112,7 +102,7 @@ export const getTableData = async (req, res) => {
 
         if (Array.isArray(value)) {
           filteredRow[col.label || col.name] = value.map(
-            (id) => relationMap[id] || id
+            (id) => relationMap[id] || id,
           );
         } else {
           filteredRow[col.label || col.name] =
