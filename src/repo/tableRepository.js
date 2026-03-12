@@ -73,21 +73,33 @@ export const updateCollectionData = async (collectionName, id, payload) => {
         const oldValue = existing[col.name];
         const newValue = updateData[col.name];
 
-        if (!oldValue || !newValue) continue;
+        // if no old files exist, nothing to delete
+        if (!oldValue) continue;
 
+        // normalize old files
         const oldFiles = Array.isArray(oldValue) ? oldValue : [oldValue];
-        const newFiles = Array.isArray(newValue) ? newValue : [newValue];
+
+        // normalize new files
+        const newFiles = !newValue
+          ? []
+          : Array.isArray(newValue)
+          ? newValue
+          : [newValue];
 
         for (const oldFile of oldFiles) {
           if (!newFiles.includes(oldFile)) {
-            const cleanPath = oldFile.startsWith("/")
-              ? oldFile.slice(1)
-              : oldFile;
+            try {
+              const cleanPath = oldFile.startsWith("/")
+                ? oldFile.slice(1)
+                : oldFile;
 
-            const fullPath = path.join(process.cwd(), cleanPath);
+              const fullPath = path.join(process.cwd(), cleanPath);
 
-            if (fs.existsSync(fullPath)) {
-              fs.unlinkSync(fullPath);
+              if (fs.existsSync(fullPath)) {
+                fs.unlinkSync(fullPath);
+              }
+            } catch (err) {
+              console.error("File deletion error:", err);
             }
           }
         }
@@ -96,7 +108,10 @@ export const updateCollectionData = async (collectionName, id, payload) => {
   }
 
   // update record
-  return await collection.updateOne({ _id: objectId }, { $set: updateData });
+  return await collection.updateOne(
+    { _id: objectId },
+    { $set: updateData }
+  );
 };
 
 export const deleteCollectionData = async (collectionName, id) => {
