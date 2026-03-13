@@ -26,6 +26,10 @@ app.use("/api", uploadRoutes);
 
 
 
+app.get("/", (req, res) => {
+  res.send("Server is running");
+});
+
 app.get("/api/system-health", async (req, res) => {
   try {
     const cpu = await si.currentLoad();
