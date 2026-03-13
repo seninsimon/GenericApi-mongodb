@@ -26,7 +26,7 @@ app.use("/api", uploadRoutes);
 
 
 
-app.get("/", (req, res) => {
+app.get("/", async (req, res) => {
   res.send("Server is running");
 });
 
