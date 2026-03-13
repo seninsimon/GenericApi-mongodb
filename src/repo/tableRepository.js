@@ -13,14 +13,21 @@ export const getCollectionData = async (collectionName, options) => {
   let query = {};
 
   // basic search (search in all fields)
-  if (search) {
+if (search) {
+  const sample = await collection.findOne();
+
+  if (sample) {
+    const fields = Object.keys(sample).filter(
+      (key) => key !== "_id" && key !== "__v"
+    );
+
     query = {
-      $or: [
-        { phone: { $regex: search, $options: "i" } },
-        { name: { $regex: search, $options: "i" } },
-      ],
+      $or: fields.map((field) => ({
+        [field]: { $regex: search, $options: "i" },
+      })),
     };
   }
+}
 
   const total = await collection.countDocuments(query);
 

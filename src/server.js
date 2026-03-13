@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import connectDB from "./config/db.js";
-
+import si from "systeminformation";
 import tableRoutes from "./routes/tableRoutes.js";
 import schemaRoutes from "./routes/schemaRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
@@ -23,6 +23,28 @@ connectDB();
 app.use("/api", tableRoutes);
 app.use("/api", schemaRoutes);
 app.use("/api", uploadRoutes);
+
+
+
+app.get("/api/system-health", async (req, res) => {
+  try {
+    const cpu = await si.currentLoad();
+    const mem = await si.mem();
+    const disk = await si.fsSize();
+
+    res.json({
+      cpu: cpu.currentLoad.toFixed(1), // %
+      ram: ((mem.used / mem.total) * 100).toFixed(1), // %
+      ramTotal: (mem.total / 1024 / 1024 / 1024).toFixed(2), // GB
+      ramUsed: (mem.used / 1024 / 1024 / 1024).toFixed(2),
+      disk: disk[0].use.toFixed(1), // %
+      diskTotal: (disk[0].size / 1024 / 1024 / 1024).toFixed(2),
+      diskUsed: (disk[0].used / 1024 / 1024 / 1024).toFixed(2),
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch system health" });
+  }
+});
 
 const PORT = process.env.PORT || 5000;
 
