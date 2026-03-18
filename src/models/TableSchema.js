@@ -18,7 +18,6 @@ const columnSchema = new mongoose.Schema({
       "date",
       "boolean",
       "relation",
-      "options",
       "image",
       "images",
       "file",
@@ -28,15 +27,9 @@ const columnSchema = new mongoose.Schema({
     default: "text",
   },
 
-  required: {
-    type: Boolean,
-    default: false,
-  },
 
-  options: {
-    type: [String],
-    default: [],
-  },
+
+
 
   showInTable: {
     type: Boolean,
@@ -55,7 +48,7 @@ const columnSchema = new mongoose.Schema({
 
   displayField: String,
 
-  // file settings
+
   fileConfig: {
     accept: {
       type: [String],
