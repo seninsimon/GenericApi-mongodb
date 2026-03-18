@@ -23,6 +23,7 @@ const columnSchema = new mongoose.Schema({
       "images",
       "file",
       "files",
+      "richText",
     ],
     default: "text",
   },
