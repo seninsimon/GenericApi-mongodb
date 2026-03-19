@@ -23,13 +23,10 @@ const columnSchema = new mongoose.Schema({
       "file",
       "files",
       "richText",
+      "textarea",
     ],
     default: "text",
   },
-
-
-
-
 
   showInTable: {
     type: Boolean,
