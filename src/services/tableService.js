@@ -4,6 +4,7 @@ import {
   getSingleCollectionData,
   insertCollectionData,
   updateCollectionData,
+  updateTableSettingsRepo,
 } from "../repo/tableRepository.js";
 
 export const fetchTableData = async (collectionName, options) => {
@@ -25,4 +26,8 @@ export const removeTableData = (collection, id) => {
 
 export const fectchSingleTableData = async (collection, id) => {
   return await getSingleCollectionData(collection, id);
+};
+
+export const updateTableSettingsService = async (table, showInMenu) => {
+  return await updateTableSettingsRepo(table, showInMenu);
 };
