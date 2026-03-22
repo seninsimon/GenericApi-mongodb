@@ -76,6 +76,11 @@ const tableSchema = new mongoose.Schema(
     },
 
     columns: [columnSchema],
+
+    showInMenu: {
+      type: Boolean,
+      default: true, 
+    },
   },
   {
     timestamps: true,

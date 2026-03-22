@@ -5,6 +5,7 @@ import {
   fetchTableData,
   modifyTableData,
   removeTableData,
+  updateTableSettingsService
 } from "../services/tableService.js";
 import mongoose from "mongoose";
 
@@ -194,6 +195,29 @@ export const getSingleTableData = async (req, res) => {
     console.error(error);
     res.status(500).json({
       message: "Failed to fetch single table data",
+    });
+  }
+};
+
+
+
+
+
+export const updateTableSettings = async (req, res) => {
+  try {
+    const { table } = req.params;
+    const { showInMenu } = req.body;
+
+    const updated = await updateTableSettingsService(table, showInMenu);
+
+    res.json({
+      message: "Table settings updated",
+      data: updated,
+    });
+  } catch (error) {
+  
+    res.status(500).json({
+      message: "Failed to update table settings",
     });
   }
 };

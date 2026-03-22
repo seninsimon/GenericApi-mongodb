@@ -176,3 +176,12 @@ export const getSingleCollectionData = async (collectionName, id) => {
   });
   return data;
 };
+
+
+export const updateTableSettingsRepo = async (table, showInMenu) => {
+  return await TableSchema.findOneAndUpdate(
+    { tableName: table },
+    { showInMenu },
+    { returnDocument: "after" }
+  );
+};
