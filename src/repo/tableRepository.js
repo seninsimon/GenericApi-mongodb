@@ -182,6 +182,6 @@ export const updateTableSettingsRepo = async (table, showInMenu) => {
   return await TableSchema.findOneAndUpdate(
     { tableName: table },
     { showInMenu },
-    { new: true }
+    { returnDocument: "after" }
   );
 };
