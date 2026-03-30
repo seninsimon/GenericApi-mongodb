@@ -1,12 +1,12 @@
-import TableSchema from "../models/TableSchema.js";
+import TableSchema from "../../models/TableSchema.js";
 import {
   createTableData,
   fectchSingleTableData,
   fetchTableData,
   modifyTableData,
   removeTableData,
-  updateTableSettingsService
-} from "../services/tableService.js";
+  updateTableSettingsService,
+} from "../../services/tableService.js";
 import mongoose from "mongoose";
 
 export const getTableData = async (req, res) => {
@@ -199,10 +199,6 @@ export const getSingleTableData = async (req, res) => {
   }
 };
 
-
-
-
-
 export const updateTableSettings = async (req, res) => {
   try {
     const { table } = req.params;
@@ -215,7 +211,6 @@ export const updateTableSettings = async (req, res) => {
       data: updated,
     });
   } catch (error) {
-  
     res.status(500).json({
       message: "Failed to update table settings",
     });

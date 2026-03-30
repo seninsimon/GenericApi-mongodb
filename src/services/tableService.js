@@ -5,7 +5,7 @@ import {
   insertCollectionData,
   updateCollectionData,
   updateTableSettingsRepo,
-} from "../repo/tableRepository.js";
+} from "../repo/core/tableRepository.js";
 
 export const fetchTableData = async (collectionName, options) => {
   const data = await getCollectionData(collectionName, options);

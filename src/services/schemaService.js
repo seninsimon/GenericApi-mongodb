@@ -4,7 +4,7 @@ import {
   getSchemaByName,
   addColumn,
   deleteColumn,
-} from "../repo/schemaRepository.js";
+} from "../repo/core/schemaRepository.js";
 
 export const createTable = async (payload) => {
   return await createTableSchema(payload);

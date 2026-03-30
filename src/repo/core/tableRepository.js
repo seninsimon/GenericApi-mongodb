@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import fs from "fs";
 import path from "path";
-import TableSchema from "../models/TableSchema.js";
+import TableSchema from "../../models/TableSchema.js";
 
 export const getCollectionData = async (collectionName, options) => {
   const { page, limit, search, sort, order } = options;

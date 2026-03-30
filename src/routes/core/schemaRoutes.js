@@ -1,4 +1,4 @@
-import express from "express";
+  import express from "express";
 import {
   createNewTable,
   getTables,
@@ -6,7 +6,7 @@ import {
   addColumnToTable,
   deleteColumnFromTable,
   updateColumn,
-} from "../controller/schemaController.js";
+} from "../../controller/core/schemaController.js";
 
 const router = express.Router();
 

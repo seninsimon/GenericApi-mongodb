@@ -1,5 +1,12 @@
 import express from "express";
-import { deleteTableData, getSingleTableData, getTableData, insertTableData, updateTableData, updateTableSettings } from "../controller/tableController.js";
+import {
+  deleteTableData,
+  getSingleTableData,
+  getTableData,
+  insertTableData,
+  updateTableData,
+  updateTableSettings,
+} from "../../controller/core/tableController.js";
 
 const router = express.Router();
 

@@ -1,11 +1,11 @@
-import { updateColumnInSchema } from "../repo/schemaRepository.js";
+import { updateColumnInSchema } from "../../repo/core/schemaRepository.js";
 import {
   createTable,
   fetchTables,
   fetchTableSchema,
   addTableColumn,
   removeTableColumn,
-} from "../services/schemaService.js";
+} from "../../services/schemaService.js";
 
 export const createNewTable = async (req, res) => {
   try {
@@ -53,7 +53,6 @@ export const deleteColumnFromTable = async (req, res) => {
   });
 };
 
-
 export const updateColumn = async (req, res) => {
   try {
     const { table, name } = req.params;
@@ -65,7 +64,6 @@ export const updateColumn = async (req, res) => {
       message: "Column updated successfully",
       result,
     });
-
   } catch (error) {
     console.error(error);
     res.status(500).json({

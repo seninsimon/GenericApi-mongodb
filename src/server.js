@@ -3,9 +3,10 @@ import cors from "cors";
 import dotenv from "dotenv";
 import connectDB from "./config/db.js";
 import si from "systeminformation";
-import tableRoutes from "./routes/tableRoutes.js";
-import schemaRoutes from "./routes/schemaRoutes.js";
-import uploadRoutes from "./routes/uploadRoutes.js";
+import tableRoutes from "./routes/core/tableRoutes.js";
+import schemaRoutes from "./routes/core/schemaRoutes.js";
+import uploadRoutes from "./routes/core/uploadRoutes.js";
+import authRoutes from "./routes/auth/auth.routes.js";
 
 dotenv.config();
 
@@ -23,6 +24,8 @@ connectDB();
 app.use("/api", tableRoutes);
 app.use("/api", schemaRoutes);
 app.use("/api", uploadRoutes);
+
+app.use("/api/auth", authRoutes);
 
 
 

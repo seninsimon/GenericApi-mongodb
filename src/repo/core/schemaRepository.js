@@ -1,4 +1,4 @@
-import TableSchema from "../models/TableSchema.js";
+import TableSchema from "../../models/TableSchema.js";
 
 export const createTableSchema = async (data) => {
   return await TableSchema.create(data);
