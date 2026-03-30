@@ -5,7 +5,7 @@ import {
   fetchTableSchema,
   addTableColumn,
   removeTableColumn,
-} from "../../services/schemaService.js";
+} from "../../services/core/schemaService.js";
 
 export const createNewTable = async (req, res) => {
   try {

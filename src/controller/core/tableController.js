@@ -6,7 +6,7 @@ import {
   modifyTableData,
   removeTableData,
   updateTableSettingsService,
-} from "../../services/tableService.js";
+} from "../../services/core/tableService.js";
 import mongoose from "mongoose";
 
 export const getTableData = async (req, res) => {
