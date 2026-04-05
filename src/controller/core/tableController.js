@@ -30,8 +30,17 @@ export const getTableData = async (req, res) => {
     const visibleColumns = schema.columns.filter((col) => col.showInTable);
 
     const relationColumns = schema.columns.filter(
-      (col) => col.type === "relation" && col.ref,
+      (col) => col.type === "relation" && col.ref
     );
+
+    // ✅ 🔥 DYNAMIC SEARCH FIELD DETECTION
+    const searchColumn =
+      schema.columns.find(
+        (col) =>
+          col.type === "text" ||
+          col.name.toLowerCase().includes("name") ||
+          col.name.toLowerCase().includes("title")
+      )?.name || "name";
 
     const result = await fetchTableData(collection, {
       page: Number(page),
@@ -39,9 +48,25 @@ export const getTableData = async (req, res) => {
       search,
       sort,
       order,
+      searchField: searchColumn, // ✅ dynamic
     });
 
     const rows = result.data;
+
+    // ✅ FAST SEARCH MODE (homepage)
+    if (search) {
+      const simpleData = rows.map((row) => ({
+        _id: row._id,
+        name: row[searchColumn] || "",
+      }));
+
+      return res.json({
+        ...result,
+        data: simpleData,
+      });
+    }
+
+    // ---------------- NORMAL TABLE FLOW ----------------
 
     const relationIds = {};
 
@@ -68,9 +93,15 @@ export const getTableData = async (req, res) => {
     for (const relation of relationColumns) {
       const ids = Array.from(relationIds[relation.name]);
       if (!ids.length) continue;
+
       const objectIds = ids.map((id) => new mongoose.Types.ObjectId(id));
+
       const refCollection = relation.ref;
-      const refSchema = await TableSchema.findOne({ tableName: refCollection });
+
+      const refSchema = await TableSchema.findOne({
+        tableName: refCollection,
+      });
+
       const displayColumn =
         refSchema?.columns.find((c) => c.showInTable)?.name || "_id";
 
@@ -82,7 +113,8 @@ export const getTableData = async (req, res) => {
       const map = {};
 
       for (const item of refData) {
-        map[item._id.toString()] = item[displayColumn] || item._id.toString();
+        map[item._id.toString()] =
+          item[displayColumn] || item._id.toString();
       }
 
       relationMaps[relation.name] = map;
@@ -103,7 +135,7 @@ export const getTableData = async (req, res) => {
 
         if (Array.isArray(value)) {
           filteredRow[col.label || col.name] = value.map(
-            (id) => relationMap[id] || id,
+            (id) => relationMap[id] || id
           );
         } else {
           filteredRow[col.label || col.name] =

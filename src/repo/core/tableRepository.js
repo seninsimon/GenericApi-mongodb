@@ -4,7 +4,7 @@ import path from "path";
 import TableSchema from "../../models/TableSchema.js";
 
 export const getCollectionData = async (collectionName, options) => {
-  const { page, limit, search, sort, order } = options;
+  const { page, limit, search, sort, order, searchField } = options;
 
   const collection = mongoose.connection.db.collection(collectionName);
 
@@ -12,22 +12,31 @@ export const getCollectionData = async (collectionName, options) => {
 
   let query = {};
 
-  // basic search (search in all fields)
-if (search) {
-  const sample = await collection.findOne();
+  // ✅ SMART SEARCH
+  if (search) {
+    if (searchField) {
+      // 🔥 search only specific field (product name)
+      query[searchField] = {
+        $regex: search,
+        $options: "i",
+      };
+    } else {
+      // fallback (old behavior)
+      const sample = await collection.findOne();
 
-  if (sample) {
-    const fields = Object.keys(sample).filter(
-      (key) => key !== "_id" && key !== "__v"
-    );
+      if (sample) {
+        const fields = Object.keys(sample).filter(
+          (key) => key !== "_id" && key !== "__v"
+        );
 
-    query = {
-      $or: fields.map((field) => ({
-        [field]: { $regex: search, $options: "i" },
-      })),
-    };
+        query = {
+          $or: fields.map((field) => ({
+            [field]: { $regex: search, $options: "i" },
+          })),
+        };
+      }
+    }
   }
-}
 
   const total = await collection.countDocuments(query);
 
