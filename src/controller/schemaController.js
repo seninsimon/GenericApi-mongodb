@@ -1,3 +1,8 @@
+import { allowedDepartments, can, isAdmin, tablePermissions } from "../auth/access.js";
+import { countUnassignedRecords, removeUploadedFiles } from "../repo/tableRepository.js";
+import { deleteTableSchema, findRelationsTo } from "../repo/schemaRepository.js";
+import { FILE_COLUMN_TYPES } from "../models/TableSchema.js";
+import { HttpError } from "./validation.js";
 import { ValidationError } from "../models/TableSchema.js";
 import { updateColumnInSchema } from "../repo/schemaRepository.js";
 import {
@@ -29,15 +34,61 @@ export const createNewTable = async (req, res) => {
   }
 };
 
+// Adds what the current user may do with the table:
+//   permissions: { view, create, edit, delete }
+//   allowedDepartments: departments the user can file records under
+const withAccess = (user, schema) => ({
+  ...schema,
+  permissions: tablePermissions(user, schema),
+  allowedDepartments: allowedDepartments(user, schema),
+});
+
+// Admins get every table; other users only the tables they can view.
 export const getTables = async (req, res) => {
-  const data = await fetchTables();
-  res.json(data);
+  const tables = await fetchTables();
+  res.json(
+    tables
+      .filter((schema) => can(req.user, schema, "view"))
+      .map((schema) => withAccess(req.user, schema))
+  );
 };
 
 export const getTableSchema = async (req, res) => {
   const { table } = req.params;
-  const data = await fetchTableSchema(table);
-  res.json(data);
+  const schema = await fetchTableSchema(table);
+  if (!schema || !can(req.user, schema, "view")) {
+    return res.status(404).json({ message: "Table not found" });
+  }
+  const result = withAccess(req.user, schema);
+  // admins: how many records still need a department
+  if (isAdmin(req.user)) result.unassignedCount = await countUnassignedRecords(table);
+  res.json(result);
+};
+
+// DELETE /schema/:table (admin): drops the table with all its records and files.
+export const deleteTable = async (req, res) => {
+  const { table } = req.params;
+  const schema = await fetchTableSchema(table);
+  if (!schema) throw new HttpError(404, "Table not found");
+
+  // don't leave relation columns in other tables pointing at nothing
+  const references = await findRelationsTo(table);
+  if (references.length) {
+    const list = references.map((r) => `${r.tableName}.${r.column}`).join(", ");
+    throw new HttpError(
+      409,
+      `Other tables link to "${table}" (${list}). Delete those relation columns first.`
+    );
+  }
+
+  const fileColumns = schema.columns
+    .filter((c) => FILE_COLUMN_TYPES.includes(c.type))
+    .map((c) => c.name);
+
+  const fileUrls = await deleteTableSchema(table, fileColumns);
+  await removeUploadedFiles(fileUrls);
+
+  res.json({ message: `Table "${table}" deleted`, deletedFiles: fileUrls.length });
 };
 
 export const addColumnToTable = async (req, res) => {
@@ -76,6 +127,9 @@ export const updateColumn = async (req, res) => {
     });
 
   } catch (error) {
+    if (error instanceof ValidationError) {
+      return res.status(400).json({ message: error.message });
+    }
     console.error(error);
     res.status(500).json({
       message: "Failed to update column",

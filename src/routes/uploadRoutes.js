@@ -2,6 +2,7 @@ import express from "express";
 import { randomUUID } from "crypto";
 import { pipeline } from "stream";
 import { upload } from "../middleware/uploadMiddleware.js";
+import { requireAuth } from "../middleware/auth.js";
 import { getObject, putObject, UPLOAD_URL_PREFIX } from "../config/storage.js";
 
 // keep letters/digits/._- so the key is safe inside a URL path
@@ -17,7 +18,7 @@ const makeKey = (originalName) =>
 
 const router = express.Router();
 
-router.post("/upload", upload.array("files"), async (req, res) => {
+router.post("/upload", requireAuth, upload.array("files"), async (req, res) => {
   try {
     const files = await Promise.all(
       (req.files ?? []).map(async (file) => {
@@ -37,7 +38,8 @@ router.post("/upload", upload.array("files"), async (req, res) => {
 
 export const fileRouter = express.Router();
 
-fileRouter.get("/*key", async (req, res) => {
+// files are only served to logged-in users (the session cookie is sent with <img> requests)
+fileRouter.get("/*key", requireAuth, async (req, res) => {
   const key = [].concat(req.params.key).join("/");
 
   try {

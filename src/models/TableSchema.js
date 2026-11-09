@@ -12,13 +12,18 @@ export const COLUMN_TYPES = [
   "images",
   "file",
   "files",
-  "richText",
+  "richtext",
   "textarea",
 ];
 
 export const FILE_COLUMN_TYPES = ["image", "images", "file", "files"];
 
 export class ValidationError extends Error {}
+
+// older spellings that may still arrive from clients or old schemas
+const TYPE_ALIASES = { richText: "richtext" };
+
+const canonicalType = (type) => TYPE_ALIASES[type] ?? type;
 
 const assertType = (type) => {
   if (!COLUMN_TYPES.includes(type)) {
@@ -31,7 +36,7 @@ export const normalizeColumn = (column = {}) => {
     throw new ValidationError("Column name is required");
   }
 
-  const type = column.type ?? "text";
+  const type = canonicalType(column.type ?? "text");
   assertType(type);
 
   const fileConfig = column.fileConfig ?? {};
@@ -63,6 +68,7 @@ export const applyColumnUpdate = (column, payload = {}) => {
   for (const key of ["label", "type", "showInTable"]) {
     if (payload[key] !== undefined) updated[key] = payload[key];
   }
+  updated.type = canonicalType(updated.type);
   assertType(updated.type);
   return updated;
 };
@@ -103,6 +109,7 @@ export const toTableSchema = (row) =>
     tableName: row.table_name,
     columns: row.columns,
     showInMenu: row.show_in_menu,
+    departments: row.departments ?? [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
