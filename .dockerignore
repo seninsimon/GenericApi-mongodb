@@ -1,6 +1,12 @@
 node_modules
+dist
+tests
+coverage
 .env
+.env.*
 .git
+.github
 *.log
 Dockerfile
 .dockerignore
+vitest.config.ts

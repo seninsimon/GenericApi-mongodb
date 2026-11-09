@@ -1,14 +1,18 @@
 {
-  "name": "mantineCore",
+  "name": "generic-erp-api",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Generic ERP API (Express + PostgreSQL)",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
-    "reset-password": "node scripts/reset-password.js"
+    "dev": "tsx watch --clear-screen=false src/server.ts",
+    "dev:worker": "tsx watch --clear-screen=false src/worker.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/server.js",
+    "worker": "node dist/worker.js",
+    "test": "vitest run",
+    "reset-password": "tsx src/scripts/resetPassword.ts",
+    "migrate": "tsx src/scripts/migrate.ts"
   },
   "keywords": [],
   "author": "",
@@ -16,15 +20,36 @@
   "packageManager": "pnpm@10.14.0",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1164.0",
+    "@aws-sdk/lib-storage": "^3.1164.0",
+    "@prometheus-io/client": "0.16.1",
+    "busboy": "^1.6.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
+    "csv-parse": "^7.0.3",
+    "csv-stringify": "^6.9.0",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
-    "multer": "^2.1.1",
+    "helmet": "^8.3.0",
     "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "pino-http": "^11.0.0",
     "systeminformation": "^5.31.4"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "@types/busboy": "^1.5.5",
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "pino-pretty": "^13.2.0",
+    "supertest": "^7.3.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

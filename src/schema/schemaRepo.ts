@@ -1,0 +1,275 @@
+import pg from "pg";
+import { env } from "../config/env.js";
+import { dataTable, ensureDataTable, forgetDataTable, syncColumnIndexes } from "../db/dataTables.js";
+import { query, withTransaction } from "../db/pool.js";
+import { HttpError } from "../lib/http.js";
+import { logger } from "../lib/logger.js";
+import { removeTableFromRoles } from "../repo/userRepo.js";
+import type { Column, TableSchema } from "../types.js";
+import { applyColumnUpdate, normalizeColumn, validateTableName } from "./columns.js";
+
+/* ============================ cache ============================ */
+// Schemas are read on almost every request, so they're cached per process.
+// Changes are broadcast with NOTIFY so every API/worker instance drops its copy;
+// a TTL is the safety net if a notification is ever missed.
+
+const CHANNEL = "erp_schema_changed";
+const TTL_MS = 60_000;
+
+let cache: Map<string, TableSchema> | null = null;
+let loadedAt = 0;
+let loading: Promise<Map<string, TableSchema>> | null = null;
+
+type SchemaRow = {
+  _id: string;
+  table_name: string;
+  columns: (Partial<Column> & Record<string, unknown>)[];
+  show_in_menu: boolean;
+  departments: { _id: string; name: string }[];
+  created_at: Date;
+  updated_at: Date;
+};
+
+const toSchema = (row: SchemaRow): TableSchema => ({
+  _id: row._id,
+  tableName: row.table_name,
+  // older stored columns may lack newer fields (required, indexed)
+  columns: row.columns.map((c) => normalizeColumn(c, { strict: false })),
+  showInMenu: row.show_in_menu,
+  departments: row.departments ?? [],
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+async function loadAll(): Promise<Map<string, TableSchema>> {
+  const { rows } = await query<SchemaRow>(`
+    SELECT s.*,
+      COALESCE((
+        SELECT jsonb_agg(jsonb_build_object('_id', d._id, 'name', d.name) ORDER BY d.name)
+        FROM table_departments td JOIN departments d ON d._id = td.department_id
+        WHERE td.table_name = s.table_name
+      ), '[]'::jsonb) AS departments
+    FROM table_schemas s
+    ORDER BY s.created_at, s._id
+  `);
+  return new Map(rows.map((r) => [r.table_name, toSchema(r)]));
+}
+
+async function schemas(): Promise<Map<string, TableSchema>> {
+  if (cache && Date.now() - loadedAt < TTL_MS) return cache;
+  loading ??= loadAll()
+    .then((map) => {
+      cache = map;
+      loadedAt = Date.now();
+      return map;
+    })
+    .finally(() => {
+      loading = null;
+    });
+  return loading;
+}
+
+export const getAllSchemas = async (): Promise<TableSchema[]> => [...(await schemas()).values()];
+export const getSchema = async (tableName: string): Promise<TableSchema | null> =>
+  (await schemas()).get(tableName) ?? null;
+
+// Call after any change to schemas, table departments or department names.
+export async function invalidateSchemas(): Promise<void> {
+  cache = null;
+  await query(`SELECT pg_notify($1, '')`, [CHANNEL]).catch((err) => logger.warn({ err }, "schema notify failed"));
+}
+
+// Listen for changes made by other instances (reconnects on failure).
+export async function startSchemaListener(): Promise<() => Promise<void>> {
+  let client: pg.Client | null = null;
+  let stopped = false;
+
+  const connect = async () => {
+    if (stopped) return;
+    try {
+      client = new pg.Client({ connectionString: env.databaseUrl });
+      client.on("notification", () => {
+        cache = null;
+      });
+      client.on("error", (err) => {
+        logger.warn({ err }, "schema listener lost connection, reconnecting");
+        cache = null;
+        client?.end().catch(() => {});
+        setTimeout(connect, 2000);
+      });
+      await client.connect();
+      await client.query(`LISTEN ${CHANNEL}`);
+    } catch (err) {
+      logger.warn({ err }, "schema listener failed to connect, retrying");
+      setTimeout(connect, 5000);
+    }
+  };
+  await connect();
+
+  return async () => {
+    stopped = true;
+    await client?.end().catch(() => {});
+  };
+}
+
+/* ============================ changes ============================ */
+
+export async function createTable(input: { tableName: unknown; columns?: unknown[]; showInMenu?: boolean }) {
+  const tableName = validateTableName(input.tableName);
+  const columns = (input.columns ?? []).map((c) => normalizeColumn(c as Record<string, unknown>));
+  if (await getSchema(tableName)) throw new HttpError(409, "Table already exists");
+
+  await ensureDataTable(tableName);
+  try {
+    await query(`INSERT INTO table_schemas (table_name, columns, show_in_menu) VALUES ($1, $2::jsonb, $3)`, [
+      tableName,
+      JSON.stringify(columns),
+      input.showInMenu ?? true,
+    ]);
+  } catch (error) {
+    if ((error as { code?: string }).code === "23505") throw new HttpError(409, "Table already exists");
+    throw error;
+  }
+  await invalidateSchemas();
+  const schema = (await getSchema(tableName))!;
+  await syncColumnIndexes(schema);
+  return schema;
+}
+
+// Read-modify-write of a table's column list, with the row locked.
+async function changeColumns(tableName: string, change: (columns: Column[]) => Column[]): Promise<TableSchema> {
+  await withTransaction(async (client) => {
+    const { rows } = await query<{ columns: Record<string, unknown>[] }>(
+      `SELECT columns FROM table_schemas WHERE table_name = $1 FOR UPDATE`,
+      [tableName],
+      client
+    );
+    if (!rows[0]) throw new HttpError(404, "Table not found");
+    const current = rows[0].columns.map((c) => normalizeColumn(c, { strict: false }));
+    await query(
+      `UPDATE table_schemas SET columns = $2::jsonb, updated_at = now() WHERE table_name = $1`,
+      [tableName, JSON.stringify(change(current))],
+      client
+    );
+  });
+  await invalidateSchemas();
+  const schema = (await getSchema(tableName))!;
+  await syncColumnIndexes(schema);
+  return schema;
+}
+
+export async function addColumn(tableName: string, input: Record<string, unknown>) {
+  const column = normalizeColumn(input);
+  if (column.type === "relation" && !(await getSchema(column.ref!))) {
+    throw new HttpError(400, `Linked table "${column.ref}" doesn't exist`);
+  }
+  let added: Column = column;
+  const schema = await changeColumns(tableName, (columns) => {
+    if (columns.some((c) => c.name === column.name)) {
+      throw new HttpError(409, `A column named "${column.name}" already exists`);
+    }
+    added = column;
+    return [...columns, column];
+  });
+  return { schema, column: added };
+}
+
+export async function updateColumn(tableName: string, columnName: string, payload: Record<string, unknown>) {
+  let before: Column | undefined;
+  let after: Column | undefined;
+  const schema = await changeColumns(tableName, (columns) => {
+    const index = columns.findIndex((c) => c.name === columnName);
+    if (index === -1) throw new HttpError(404, "Column not found");
+    before = columns[index];
+    after = applyColumnUpdate(columns[index], payload);
+    return columns.map((c, i) => (i === index ? after! : c));
+  });
+  return { schema, before: before!, after: after! };
+}
+
+export async function deleteColumn(tableName: string, columnName: string) {
+  let removed: Column | undefined;
+  const schema = await changeColumns(tableName, (columns) => {
+    removed = columns.find((c) => c.name === columnName);
+    if (!removed) throw new HttpError(404, "Column not found");
+    return columns.filter((c) => c.name !== columnName);
+  });
+  return { schema, removed: removed! };
+}
+
+// settings: { showInMenu?, departmentIds? }
+export async function updateTableSettings(
+  tableName: string,
+  settings: { showInMenu?: unknown; departmentIds?: string[] }
+) {
+  const updated = await withTransaction(async (client) => {
+    const { rowCount } = await query(
+      `UPDATE table_schemas SET show_in_menu = COALESCE($2, show_in_menu), updated_at = now() WHERE table_name = $1`,
+      [tableName, typeof settings.showInMenu === "boolean" ? settings.showInMenu : null],
+      client
+    );
+    if (!rowCount) return false;
+    if (settings.departmentIds) {
+      await query(`DELETE FROM table_departments WHERE table_name = $1`, [tableName], client);
+      if (settings.departmentIds.length) {
+        await query(
+          `INSERT INTO table_departments (table_name, department_id)
+           SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING`,
+          [tableName, settings.departmentIds],
+          client
+        );
+      }
+    }
+    return true;
+  });
+  if (!updated) throw new HttpError(404, "Table not found");
+  await invalidateSchemas();
+  return (await getSchema(tableName))!;
+}
+
+// Other tables with relation columns pointing at tableName.
+export async function findRelationsTo(tableName: string) {
+  return (await getAllSchemas()).flatMap((s) =>
+    s.tableName === tableName
+      ? []
+      : s.columns.filter((c) => c.type === "relation" && c.ref === tableName).map((c) => ({ tableName: s.tableName, column: c.name }))
+  );
+}
+
+// Drops the table, its schema, department links and role permissions.
+// Returns the uploaded file URLs its records referenced.
+export async function deleteTable(schema: TableSchema, fileColumns: string[]): Promise<string[]> {
+  const urls = await withTransaction(async (client) => {
+    const table = dataTable(schema.tableName);
+    const exists = await query<{ t: string | null }>(`SELECT to_regclass($1) AS t`, [table], client);
+
+    let found: string[] = [];
+    if (exists.rows[0].t && fileColumns.length) {
+      const { rows } = await query<{ files: unknown[] }>(
+        `SELECT jsonb_build_array(${fileColumns.map((_, i) => `data -> $${i + 1}`).join(", ")}) AS files FROM ${table}`,
+        fileColumns,
+        client
+      );
+      found = rows.flatMap((r) => r.files.flat()).filter((u): u is string => typeof u === "string" && u.length > 0);
+    }
+
+    await query(`DROP TABLE IF EXISTS ${table}`, [], client);
+    await query(`DELETE FROM table_schemas WHERE table_name = $1`, [schema.tableName], client);
+    await removeTableFromRoles(schema.tableName, client);
+    return found;
+  });
+
+  forgetDataTable(schema.tableName);
+  await invalidateSchemas();
+  return urls;
+}
+
+// Make sure every table has its storage and indexes (run at start-up).
+export async function ensureAllDataTables() {
+  for (const schema of await getAllSchemas()) {
+    await ensureDataTable(schema.tableName);
+    await syncColumnIndexes(schema).catch((err) =>
+      logger.error({ err, table: schema.tableName }, "could not sync sort indexes")
+    );
+  }
+}
