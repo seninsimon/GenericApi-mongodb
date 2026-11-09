@@ -12,40 +12,59 @@ const columnSchema = new mongoose.Schema({
 
   type: {
     type: String,
-    enum: ["text", "number", "date", "boolean", "relation", "options"],
+    enum: [
+      "text",
+      "number",
+      "date",
+      "boolean",
+      "relation",
+      "image",
+      "images",
+      "file",
+      "files",
+      "richText",
+      "textarea",
+    ],
     default: "text",
   },
 
-  required: {
-    type: Boolean,
-    default: false,
-  },
-
-  // for dropdown fields
-  options: {
-    type: [String],
-    default: [],
-  },
-
-  // show column in table view
   showInTable: {
     type: Boolean,
     default: true,
   },
 
-  // relation table name
   ref: {
     type: String,
     default: null,
   },
 
-  // support multi select relation
   multiple: {
     type: Boolean,
     default: false,
   },
 
   displayField: String,
+
+
+  fileConfig: {
+    accept: {
+      type: [String],
+      default: [],
+    },
+    maxSize: {
+      type: Number,
+      default: 5,
+    },
+    maxFiles: {
+      type: Number,
+      default: 1,
+    },
+  },
+
+  uploadPath: {
+    type: String,
+    default: "uploads",
+  },
 });
 
 const tableSchema = new mongoose.Schema(
@@ -57,6 +76,11 @@ const tableSchema = new mongoose.Schema(
     },
 
     columns: [columnSchema],
+
+    showInMenu: {
+      type: Boolean,
+      default: true, 
+    },
   },
   {
     timestamps: true,
