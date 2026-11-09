@@ -4,8 +4,8 @@ import {
   getSingleCollectionData,
   insertCollectionData,
   updateCollectionData,
-  updateTableSettingsRepo,
 } from "../repo/tableRepository.js";
+import { updateTableSettings } from "../repo/schemaRepository.js";
 
 export const fetchTableData = async (collectionName, options) => {
   const data = await getCollectionData(collectionName, options);
@@ -29,5 +29,5 @@ export const fectchSingleTableData = async (collection, id) => {
 };
 
 export const updateTableSettingsService = async (table, showInMenu) => {
-  return await updateTableSettingsRepo(table, showInMenu);
+  return await updateTableSettings(table, showInMenu);
 };

@@ -1,23 +1,7 @@
 import multer from "multer";
-import path from "path";
-import fs from "fs";
 
-// create uploads folder if not exists
-if (!fs.existsSync("uploads")) {
-  fs.mkdirSync("uploads");
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/");
-  },
-
-  filename: (req, file, cb) => {
-    const uniqueName = Date.now() + "-" + file.originalname;
-    cb(null, uniqueName);
-  },
-});
-
+// Files are buffered in memory and then streamed to object storage.
 export const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB, matches nginx client_max_body_size
 });

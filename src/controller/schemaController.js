@@ -1,3 +1,4 @@
+import { ValidationError } from "../models/TableSchema.js";
 import { updateColumnInSchema } from "../repo/schemaRepository.js";
 import {
   createTable,
@@ -16,6 +17,14 @@ export const createNewTable = async (req, res) => {
       data,
     });
   } catch (error) {
+    if (error instanceof ValidationError) {
+      return res.status(400).json({ message: error.message });
+    }
+    // 23505 = unique_violation on table_name
+    if (error.code === "23505") {
+      return res.status(409).json({ message: "Table already exists" });
+    }
+    console.error(error);
     res.status(500).json({ message: "Error creating table" });
   }
 };

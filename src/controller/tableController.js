@@ -1,4 +1,6 @@
-import TableSchema from "../models/TableSchema.js";
+import { pickDisplayField } from "../models/TableSchema.js";
+import { getSchemaByName } from "../repo/schemaRepository.js";
+import { getRecordOptions, getRecordsByIds } from "../repo/tableRepository.js";
 import {
   createTableData,
   fectchSingleTableData,
@@ -7,7 +9,6 @@ import {
   removeTableData,
   updateTableSettingsService
 } from "../services/tableService.js";
-import mongoose from "mongoose";
 
 export const getTableData = async (req, res) => {
   try {
@@ -21,7 +22,7 @@ export const getTableData = async (req, res) => {
       order = "desc",
     } = req.query;
 
-    const schema = await TableSchema.findOne({ tableName: collection });
+    const schema = await getSchemaByName(collection);
 
     if (!schema) {
       return res.status(404).json({ message: "Table schema not found" });
@@ -33,11 +34,16 @@ export const getTableData = async (req, res) => {
       (col) => col.type === "relation" && col.ref,
     );
 
+    // the table UI sorts by column label; records are keyed by column name
+    const sortColumn = schema.columns.find(
+      (col) => col.name === sort || col.label === sort,
+    );
+
     const result = await fetchTableData(collection, {
       page: Number(page),
       limit: Number(limit),
       search,
-      sort,
+      sort: sortColumn ? sortColumn.name : sort,
       order,
     });
 
@@ -68,21 +74,16 @@ export const getTableData = async (req, res) => {
     for (const relation of relationColumns) {
       const ids = Array.from(relationIds[relation.name]);
       if (!ids.length) continue;
-      const objectIds = ids.map((id) => new mongoose.Types.ObjectId(id));
       const refCollection = relation.ref;
-      const refSchema = await TableSchema.findOne({ tableName: refCollection });
-      const displayColumn =
-        refSchema?.columns.find((c) => c.showInTable)?.name || "_id";
+      const refSchema = await getSchemaByName(refCollection);
+      const displayColumn = pickDisplayField(refSchema, relation.displayField);
 
-      const refData = await mongoose.connection
-        .collection(refCollection)
-        .find({ _id: { $in: objectIds } })
-        .toArray();
+      const refData = await getRecordsByIds(refCollection, ids);
 
       const map = {};
 
       for (const item of refData) {
-        map[item._id.toString()] = item[displayColumn] || item._id.toString();
+        map[item._id] = item[displayColumn] || item._id;
       }
 
       relationMaps[relation.name] = map;
@@ -124,6 +125,24 @@ export const getTableData = async (req, res) => {
     res.status(500).json({
       message: "Server error",
     });
+  }
+};
+
+// GET /table/:collection/options -> [{ value, label }] for relation dropdowns
+export const getTableOptions = async (req, res) => {
+  try {
+    const { collection } = req.params;
+    const schema = await getSchemaByName(collection);
+
+    if (!schema) {
+      return res.status(404).json({ message: "Table schema not found" });
+    }
+
+    const displayField = pickDisplayField(schema, req.query.displayField);
+    res.json(await getRecordOptions(collection, displayField));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Failed to fetch options" });
   }
 };
 

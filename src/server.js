@@ -2,10 +2,11 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import connectDB from "./config/db.js";
+import { initStorage } from "./config/storage.js";
 import si from "systeminformation";
 import tableRoutes from "./routes/tableRoutes.js";
 import schemaRoutes from "./routes/schemaRoutes.js";
-import uploadRoutes from "./routes/uploadRoutes.js";
+import uploadRoutes, { fileRouter } from "./routes/uploadRoutes.js";
 
 dotenv.config();
 
@@ -14,10 +15,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// serve uploaded files
-app.use("/uploads", express.static("uploads"));
+// serve uploaded files from object storage
+app.use("/uploads", fileRouter);
 
-connectDB();
 
 // routes
 app.use("/api", tableRoutes);
@@ -51,6 +51,9 @@ app.get("/api/system-health", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
+
+await connectDB();
+await initStorage();
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
