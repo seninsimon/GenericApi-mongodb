@@ -12,7 +12,9 @@
     "worker": "node dist/worker.js",
     "test": "vitest run",
     "reset-password": "tsx src/scripts/resetPassword.ts",
-    "migrate": "tsx src/scripts/migrate.ts"
+    "migrate": "tsx src/scripts/migrate.ts",
+    "seed": "tsx src/scripts/seed.ts",
+    "db:reset": "tsx src/scripts/reset.ts"
   },
   "keywords": [],
   "author": "",

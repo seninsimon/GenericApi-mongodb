@@ -1,6 +1,8 @@
 import {
   CreateBucketCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
+  ListObjectsV2Command,
   GetObjectCommand,
   HeadBucketCommand,
   S3Client,
@@ -31,6 +33,8 @@ export interface Storage {
   put(key: string, body: Readable | Buffer, contentType: string): Promise<void>;
   get(key: string, range?: string): Promise<StoredObject>;
   delete(key: string): Promise<void>;
+  // delete every object in the bucket (used by the reset command); returns the count
+  clear(): Promise<number>;
 }
 
 /* ---------------- S3 ---------------- */
@@ -103,6 +107,23 @@ class S3Storage implements Storage {
   async delete(key: string) {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
   }
+
+  async clear() {
+    let deleted = 0;
+    let token: string | undefined;
+    do {
+      const page = await this.client.send(
+        new ListObjectsV2Command({ Bucket: this.bucket, ContinuationToken: token, MaxKeys: 1000 })
+      );
+      const keys = (page.Contents ?? []).map((o) => ({ Key: o.Key! }));
+      if (keys.length) {
+        await this.client.send(new DeleteObjectsCommand({ Bucket: this.bucket, Delete: { Objects: keys, Quiet: true } }));
+        deleted += keys.length;
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    return deleted;
+  }
 }
 
 /* ---------------- memory (tests) ---------------- */
@@ -137,6 +158,12 @@ class MemoryStorage implements Storage {
 
   async delete(key: string) {
     this.objects.delete(key);
+  }
+
+  async clear() {
+    const count = this.objects.size;
+    this.objects.clear();
+    return count;
   }
 }
 
