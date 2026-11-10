@@ -10,7 +10,7 @@ import { storage } from "./storage.js";
 export async function prepare({ listenForSchemaChanges = true } = {}) {
   if (!env.databaseUrl) throw new Error("DATABASE_URL is not set");
   if (env.isProduction) {
-    if (!env.cookieSecure) logger.warn("COOKIE_SECURE is false: serve the app over HTTPS and set it to true");
+    if (!env.cookieSecure) logger.warn("COOKIE_SECURE is false: the session cookie is HTTPS-only on HTTPS requests only; set it to true if the app is never used over plain http");
     if (env.s3.secretKey === "erp-storage-secret") logger.warn("S3_SECRET_KEY is the default value: change it");
   }
 

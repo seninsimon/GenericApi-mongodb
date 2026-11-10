@@ -348,14 +348,14 @@ async function main() {
   // never mix demo data into a system that already has these tables or users
   for (const t of TABLES) {
     if (await getSchema(t.name)) {
-      console.error(`Table "${t.name}" already exists. Run "pnpm db:reset" first to start from an empty system.`);
+      console.error(`Table "${t.name}" already exists. Wipe it first to start from an empty system: "pnpm db:reset" (or "./deploy.sh wipe" on a deployed server).`);
       process.exitCode = 1;
       return;
     }
   }
   for (const u of USERS) {
     if (await findUserForLogin(u.username)) {
-      console.error(`User "${u.username}" already exists. Run "pnpm db:reset" first.`);
+      console.error(`User "${u.username}" already exists. Wipe first: "pnpm db:reset" (or "./deploy.sh wipe").`);
       process.exitCode = 1;
       return;
     }

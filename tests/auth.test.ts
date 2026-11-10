@@ -19,6 +19,21 @@ describe("authentication", () => {
     expect((await anon.get("/api/auth/me")).status).toBe(200);
   });
 
+  it("marks the cookie Secure only on HTTPS requests (e.g. through a tunnel)", async () => {
+    const app = await getApp();
+    const send = (proto?: string) => {
+      const req = request(app).post("/api/auth/login").set("X-Requested-With", "XMLHttpRequest");
+      if (proto) req.set("X-Forwarded-Proto", proto);
+      return req.send(ADMIN);
+    };
+    const overHttp = await send();
+    expect(overHttp.status).toBe(200);
+    expect(String(overHttp.headers["set-cookie"])).not.toMatch(/;\s*Secure/i);
+    const overHttps = await send("https");
+    expect(overHttps.status).toBe(200);
+    expect(String(overHttps.headers["set-cookie"])).toMatch(/;\s*Secure/i);
+  });
+
   it("rejects bad credentials and requires login", async () => {
     const anon = await anonymous();
     expect((await anon.post("/api/auth/login", { username: "admin", password: "wrong-password" })).status).toBe(401);

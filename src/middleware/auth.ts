@@ -8,19 +8,22 @@ import type { CurrentUser } from "../types.js";
 export const SESSION_COOKIE = "erp_session";
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-const cookieOptions = (expires?: Date) => ({
+const cookieOptions = (res: Response, expires?: Date) => ({
   httpOnly: true,
   sameSite: "lax" as const,
-  // set COOKIE_SECURE=true when served over HTTPS
-  secure: env.cookieSecure,
+  // HTTPS-only whenever the request came over HTTPS (directly, or through a
+  // trusted proxy/tunnel that sets X-Forwarded-Proto), so one server can be
+  // used over http on the office network and https from outside.
+  // COOKIE_SECURE=true forces it for every request.
+  secure: env.cookieSecure || res.req.secure,
   path: "/",
   expires,
 });
 
 export const setSessionCookie = (res: Response, token: string, expires: Date) =>
-  res.cookie(SESSION_COOKIE, token, cookieOptions(expires));
+  res.cookie(SESSION_COOKIE, token, cookieOptions(res, expires));
 
-export const clearSessionCookie = (res: Response) => res.clearCookie(SESSION_COOKIE, cookieOptions());
+export const clearSessionCookie = (res: Response) => res.clearCookie(SESSION_COOKIE, cookieOptions(res));
 
 // Loads the logged-in user into req.user, or responds 401.
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
