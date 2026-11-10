@@ -71,4 +71,6 @@ export interface StoredRecord {
   _id: string;
   data: RecordData;
   departmentId: string | null;
+  createdAt?: Date;
+  updatedAt?: Date;
 }

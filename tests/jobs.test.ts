@@ -63,7 +63,7 @@ describe("CSV export / import jobs", async () => {
 
     const list = await world.user.get(`/api/table/${t}?search=Imported`);
     expect(list.body.total).toBe(2);
-    expect(list.body.data.map((r: { Owner: string }) => r.Owner)).toEqual(["Ann", "Ann"]);
+    expect(list.body.data.map((r: { owner: string }) => r.owner)).toEqual(["Ann", "Ann"]);
 
     const audit = await admin.get(`/api/audit?tableName=${t}&action=import`);
     expect(audit.body.data[0].changes).toMatchObject({ inserted: 2, failed: 3 });

@@ -8,13 +8,23 @@ import { HttpError, intParam, param } from "../lib/http.js";
 import { currentUser } from "../middleware/auth.js";
 import { createJob, getJob, listJobs, publicJob } from "../repo/jobRepo.js";
 import { ObjectNotFoundError, storage } from "../storage.js";
+import { parseFilters } from "../schema/filters.js";
 import { loadTable } from "./records.js";
 
 // POST /api/table/:collection/export
 export async function startExportHandler(req: Request, res: Response) {
   const user = currentUser(req);
   const schema = await loadTable(req, "view");
-  const job = await createJob({ type: "export", tableName: schema.tableName, userId: user._id, username: user.username });
+  // optional: export only what the list currently shows
+  const search = typeof req.body?.search === "string" ? req.body.search.slice(0, 200) : "";
+  const filters = parseFilters(req.body?.filters, schema);
+  const job = await createJob({
+    type: "export",
+    tableName: schema.tableName,
+    userId: user._id,
+    username: user.username,
+    params: { search, filters },
+  });
   res.status(202).json({ job: publicJob(job) });
 }
 

@@ -1,7 +1,8 @@
 import { env } from "../config/env.js";
 import { dataTable, ensureDataTable, sortExpression } from "../db/dataTables.js";
 import { isMissingTable, query, type Db } from "../db/pool.js";
-import type { Column, RecordData, StoredRecord } from "../types.js";
+import { filterConditions, type RecordFilter } from "../schema/filters.js";
+import type { Column, RecordData, StoredRecord, TableSchema } from "../types.js";
 
 // SQL condition limiting records to departmentIds (null = no limit, for admins).
 const departmentScope = (params: unknown[], departmentIds: string[] | null, alias = "t") => {
@@ -12,8 +13,36 @@ const departmentScope = (params: unknown[], departmentIds: string[] | null, alia
 
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, (c) => `\\${c}`);
 
-type Row = { _id: string; data: RecordData; department_id: string | null };
-const toStored = (row: Row): StoredRecord => ({ _id: row._id, data: row.data, departmentId: row.department_id });
+type Row = {
+  _id: string;
+  data: RecordData;
+  department_id: string | null;
+  created_at?: Date;
+  updated_at?: Date;
+};
+const toStored = (row: Row): StoredRecord => ({
+  _id: row._id,
+  data: row.data,
+  departmentId: row.department_id,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+// WHERE conditions shared by lists and exports: department scope, search, filters.
+export function recordConditions(
+  schema: TableSchema,
+  opts: { departmentIds: string[] | null; search?: string; filters?: RecordFilter[] },
+  params: unknown[]
+): string {
+  const conditions = [departmentScope(params, opts.departmentIds)];
+  // "contains" search over all values (GIN trigram index on erp_search_text)
+  if (opts.search) {
+    params.push(`%${escapeLike(opts.search)}%`);
+    conditions.push(`erp_search_text(t.data) ILIKE $${params.length}`);
+  }
+  conditions.push(...filterConditions(schema, opts.filters ?? [], params));
+  return conditions.join(" AND ");
+}
 
 // Missing table = nothing stored yet.
 async function orEmpty<T>(fn: () => Promise<T>, empty: T): Promise<T> {
@@ -27,7 +56,9 @@ async function orEmpty<T>(fn: () => Promise<T>, empty: T): Promise<T> {
 
 export interface ListOptions {
   search?: string;
-  sortColumn?: Column | null;
+  filters?: RecordFilter[];
+  // a column, or a system field ("_createdAt" / "_updatedAt")
+  sort?: Column | "_createdAt" | "_updatedAt" | null;
   order?: "asc" | "desc";
   page: number;
   limit: number;
@@ -40,31 +71,28 @@ export interface ListResult {
   totalIsEstimate: boolean;
 }
 
-export async function listRecords(tableName: string, options: ListOptions): Promise<ListResult> {
-  const table = dataTable(tableName);
+export async function listRecords(schema: TableSchema, options: ListOptions): Promise<ListResult> {
+  const table = dataTable(schema.tableName);
   const params: unknown[] = [];
-  const conditions = [departmentScope(params, options.departmentIds)];
-
-  // "contains" search over all values (GIN trigram index on erp_search_text)
-  if (options.search) {
-    params.push(`%${escapeLike(options.search)}%`);
-    conditions.push(`erp_search_text(t.data) ILIKE $${params.length}`);
-  }
-  const where = `WHERE ${conditions.join(" AND ")}`;
+  const where = `WHERE ${recordConditions(schema, options, params)}`;
 
   const direction = options.order === "asc" ? "ASC" : "DESC";
   // Typed sort expression; matches the column's sort index when it has one.
   // Postgres' default NULL order (last for ASC, first for DESC) is kept on
   // purpose: an explicit NULLS LAST on DESC would stop the index being used.
-  const orderBy = options.sortColumn
-    ? `${sortExpression(options.sortColumn)} ${direction}, t.created_at ${direction}, t._id ${direction}`
-    : `t.created_at ${direction}, t._id ${direction}`;
+  const sort = options.sort;
+  const orderBy =
+    sort === "_updatedAt"
+      ? `t.updated_at ${direction}, t._id ${direction}`
+      : sort && sort !== "_createdAt"
+        ? `${sortExpression(sort)} ${direction}, t.created_at ${direction}, t._id ${direction}`
+        : `t.created_at ${direction}, t._id ${direction}`;
 
   return orEmpty(async () => {
     const { total, totalIsEstimate } = await countRecords(table, where, params);
     const offset = (options.page - 1) * options.limit;
     const { rows } = await query<Row & { department_name: string | null }>(
-      `SELECT t._id, t.data, t.department_id, d.name AS department_name
+      `SELECT t._id, t.data, t.department_id, t.created_at, t.updated_at, d.name AS department_name
        FROM ${table} t
        LEFT JOIN departments d ON d._id = t.department_id
        ${where}
@@ -165,14 +193,15 @@ export const findByLabels = (
 export const getRecord = (tableName: string, id: string, departmentIds: string[] | null, db?: Db) =>
   orEmpty(async () => {
     const params: unknown[] = [id];
-    const { rows } = await query<Row>(
-      `SELECT t._id, t.data, t.department_id FROM ${dataTable(tableName)} t
+    const { rows } = await query<Row & { department_name: string | null }>(
+      `SELECT t._id, t.data, t.department_id, t.created_at, t.updated_at, d.name AS department_name
+       FROM ${dataTable(tableName)} t LEFT JOIN departments d ON d._id = t.department_id
        WHERE t._id = $1 AND ${departmentScope(params, departmentIds)}`,
       params,
       db
     );
-    return rows[0] ? toStored(rows[0]) : null;
-  }, null as StoredRecord | null);
+    return rows[0] ? { ...toStored(rows[0]), departmentName: rows[0].department_name } : null;
+  }, null as (StoredRecord & { departmentName: string | null }) | null);
 
 export async function insertRecord(tableName: string, data: RecordData, departmentId: string | null, db?: Db) {
   await ensureDataTable(tableName);
@@ -275,11 +304,16 @@ export async function assignUnassigned(tableName: string, departmentId: string) 
 }
 
 // Read a table in batches in insertion order (exports), within departmentIds.
-export async function* scanRecords(tableName: string, departmentIds: string[] | null, batchSize = 1000) {
+export async function* scanRecords(
+  schema: TableSchema,
+  opts: { departmentIds: string[] | null; search?: string; filters?: RecordFilter[] },
+  batchSize = 1000
+) {
+  const tableName = schema.tableName;
   let after: { createdAt: Date; id: string } | null = null;
   for (;;) {
     const params: unknown[] = [];
-    const conditions = [departmentScope(params, departmentIds)];
+    const conditions = [recordConditions(schema, opts, params)];
     if (after) {
       params.push(after.createdAt, after.id);
       conditions.push(`(t.created_at, t._id) > ($${params.length - 1}, $${params.length})`);

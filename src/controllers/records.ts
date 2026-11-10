@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { allowedDepartments, can, departmentFilter, isAdmin } from "../auth/access.js";
 import { withTransaction } from "../db/pool.js";
-import { HttpError, intParam, param } from "../lib/http.js";
+import { HttpError, intParam, param, toIdList } from "../lib/http.js";
 import { currentUser } from "../middleware/auth.js";
 import { audit, diffRecord, snapshot } from "../repo/auditRepo.js";
 import {
@@ -13,7 +13,9 @@ import {
   listRecords,
   lockRecord,
   updateRecord,
+  type ListOptions,
 } from "../repo/recordRepo.js";
+import { parseFilters } from "../schema/filters.js";
 import { columnByNameOrLabel, FILE_COLUMN_TYPES, INDEXABLE_TYPES, pickDisplayField } from "../schema/columns.js";
 import { getSchema } from "../schema/schemaRepo.js";
 import { checkRelations, checkRequired, coerceValues } from "../schema/validateRecord.js";
@@ -80,14 +82,13 @@ export async function listHandler(req: Request, res: Response) {
   const user = currentUser(req);
   const schema = await loadTable(req, "view");
 
-  const sortKey = typeof req.query.sort === "string" ? req.query.sort : "";
-  const sortColumn = sortKey ? columnByNameOrLabel(schema, sortKey) : undefined;
   const page = intParam(req.query.page, 1, 1, 1_000_000);
   const limit = intParam(req.query.limit, 10, 1, 500);
 
-  const result = await listRecords(schema.tableName, {
+  const result = await listRecords(schema, {
     search: typeof req.query.search === "string" ? req.query.search.slice(0, 200) : "",
-    sortColumn: sortColumn && INDEXABLE_TYPES.includes(sortColumn.type) ? sortColumn : null,
+    filters: parseFilters(req.query.filters, schema),
+    sort: resolveSort(schema, req.query.sort),
     order: req.query.order === "asc" ? "asc" : "desc",
     page,
     limit,
@@ -97,7 +98,7 @@ export async function listHandler(req: Request, res: Response) {
   // resolve relation ids to display names, only for records the user may see
   const relationLabels = new Map<string, Map<string, string>>();
   for (const column of schema.columns) {
-    if (column.type !== "relation" || !column.ref || !column.showInTable) continue;
+    if (column.type !== "relation" || !column.ref) continue;
     const ids = new Set(result.rows.flatMap((r) => fileUrls(r.data[column.name])));
     if (!ids.size) continue;
     const refSchema = await getSchema(column.ref);
@@ -111,27 +112,46 @@ export async function listHandler(req: Request, res: Response) {
     );
   }
 
-  const visible = schema.columns.filter((c) => c.showInTable);
   const withDepartment = isAdmin(user) || allowedDepartments(user, schema).length > 1;
   const relationLabel = (labels: Map<string, string> | undefined, id: unknown) =>
     id ? (labels?.get(String(id)) ?? "—") : "";
 
+  // Rows are keyed by column NAME (all columns; showInTable only sets the
+  // default visibility in the UI). Relations come back as display names, rich
+  // text as a plain-text preview.
   const data = result.rows.map((row) => {
-    const out: Record<string, unknown> = { _id: row._id };
-    for (const column of visible) {
-      const key = column.label || column.name;
+    const out: Record<string, unknown> = {
+      _id: row._id,
+      _createdAt: row.createdAt,
+      _updatedAt: row.updatedAt,
+    };
+    for (const column of schema.columns) {
       const value = row.data[column.name];
-      if (column.type === "richtext") out[key] = htmlToText(value, 120);
+      if (column.type === "richtext") out[column.name] = htmlToText(value, 160);
       else if (column.type === "relation") {
         const labels = relationLabels.get(column.name);
-        out[key] = Array.isArray(value) ? value.map((id) => relationLabel(labels, id)) : relationLabel(labels, value);
-      } else out[key] = value;
+        out[column.name] = Array.isArray(value)
+          ? value.map((id) => relationLabel(labels, id))
+          : relationLabel(labels, value);
+      } else out[column.name] = value ?? null;
     }
-    if (withDepartment) out._department = row.departmentName ?? "Unassigned";
+    if (withDepartment) {
+      out._department = row.departmentName ?? "Unassigned";
+      out._departmentId = row.departmentId;
+    }
     return out;
   });
 
   res.json({ data, total: result.total, totalIsEstimate: result.totalIsEstimate, page, limit });
+}
+
+// ?sort= column name (or label), or _createdAt / _updatedAt
+function resolveSort(schema: TableSchema, raw: unknown): ListOptions["sort"] {
+  if (raw === "_createdAt" || raw === "_id" || raw === "createdAt") return "_createdAt";
+  if (raw === "_updatedAt") return "_updatedAt";
+  if (typeof raw !== "string" || !raw) return null;
+  const column = columnByNameOrLabel(schema, raw);
+  return column && INDEXABLE_TYPES.includes(column.type) ? column : null;
 }
 
 /* ---------------- relation options ---------------- */
@@ -161,7 +181,54 @@ export async function getHandler(req: Request, res: Response) {
   const schema = await loadTable(req, "view");
   const record = await getRecord(schema.tableName, param(req, "id"), departmentFilter(user, schema));
   if (!record) throw new HttpError(404, "Record not found");
-  res.json({ _id: record._id, ...record.data, _departmentId: record.departmentId });
+  res.json({
+    _id: record._id,
+    ...record.data,
+    _departmentId: record.departmentId,
+    _departmentName: record.departmentName,
+    _createdAt: record.createdAt,
+    _updatedAt: record.updatedAt,
+  });
+}
+
+// POST /table/:collection/bulk-delete { ids: string[] } (max 500)
+export async function bulkDeleteHandler(req: Request, res: Response) {
+  const user = currentUser(req);
+  const schema = await loadTable(req, "delete");
+  const ids = toIdList(req.body?.ids);
+  if (!ids.length) throw new HttpError(400, "Select at least one record");
+  if (ids.length > 500) throw new HttpError(400, "At most 500 records at a time");
+
+  const deleted = await withTransaction(async (client) => {
+    const removed = [];
+    for (const id of ids) {
+      const record = await deleteRecord(schema.tableName, id, departmentFilter(user, schema), client);
+      if (!record) continue;
+      removed.push(record);
+      await audit(
+        req,
+        {
+          action: "delete",
+          entity: "record",
+          tableName: schema.tableName,
+          recordId: id,
+          changes: {
+            ...snapshot(record.data, "from"),
+            ...(record.departmentId ? { _department: { from: departmentName(schema, record.departmentId) } } : {}),
+          },
+        },
+        client
+      );
+    }
+    return removed;
+  });
+
+  await deleteUploads(
+    deleted.flatMap((r) =>
+      schema.columns.filter((c) => FILE_COLUMN_TYPES.includes(c.type)).flatMap((c) => fileUrls(r.data[c.name]))
+    )
+  );
+  res.json({ message: `${deleted.length} record(s) deleted`, deleted: deleted.length, notFound: ids.length - deleted.length });
 }
 
 export async function createHandler(req: Request, res: Response) {

@@ -60,7 +60,7 @@ describe("records: validation, search, sorting, options, audit", async () => {
   it("sorts numbers numerically using the sort index", async () => {
     for (const price of [100, 9, 25]) await world.user.post(`/api/table/${t}`, { ...valid, title: `p${price}`, price });
     const res = await world.user.get(`/api/table/${t}?sort=Price&order=asc&limit=100`);
-    const prices = res.body.data.map((r: { Price: number }) => r.Price).filter((p: unknown) => p != null);
+    const prices = res.body.data.map((r: { price: number }) => r.price).filter((p: unknown) => p != null);
     expect(prices).toEqual([...prices].sort((a: number, b: number) => a - b));
 
     const { rows } = await query(`SELECT indexdef FROM pg_indexes WHERE schemaname = 'erp_data' AND tablename = $1`, [t]);
@@ -91,7 +91,7 @@ describe("records: validation, search, sorting, options, audit", async () => {
     await world.user.post(`/api/table/${t}`, { ...valid, title: "Quarterly zebra plan", notes: "<h2>Big &amp; bold</h2>" });
     const res = await world.user.get(`/api/table/${t}?search=ZEBRA`);
     expect(res.body.total).toBe(1);
-    expect(res.body.data[0].Notes).toBe("Big & bold");
+    expect(res.body.data[0].notes).toBe("Big & bold");
     expect(res.body.totalIsEstimate).toBe(false);
   });
 

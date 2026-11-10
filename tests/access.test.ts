@@ -61,7 +61,7 @@ describe("access control", async () => {
     expect((await alice.get(`/api/table/${projects}/${aliceRow}`)).body._departmentId).toBe(dev._id);
 
     const list = await alice.get(`/api/table/${projects}`);
-    expect(list.body.data[0]).toMatchObject({ Member: "alice row", Repo: "hrms" });
+    expect(list.body.data[0]).toMatchObject({ member: "alice row", repo: "hrms" });
     expect(list.body.data[0]).not.toHaveProperty("_department");
 
     expect((await bob.get(`/api/table/${projects}`)).body.total).toBe(0);

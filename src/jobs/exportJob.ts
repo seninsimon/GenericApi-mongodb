@@ -5,6 +5,7 @@ import { getRecordsByIds, scanRecords } from "../repo/recordRepo.js";
 import { setProgress, type Job } from "../repo/jobRepo.js";
 import { getUserById } from "../repo/userRepo.js";
 import { pickDisplayField } from "../schema/columns.js";
+import { parseFilters } from "../schema/filters.js";
 import { getSchema } from "../schema/schemaRepo.js";
 import { storage } from "../storage.js";
 import type { CurrentUser, StoredRecord, TableSchema } from "../types.js";
@@ -54,7 +55,10 @@ export async function runExport(job: Job) {
   let rows = 0;
   try {
     await write(header);
-    for await (const batch of scanRecords(schema.tableName, departmentFilter(user, schema))) {
+    // filters are re-validated: columns may have changed since the job was queued
+    const filters = parseFilters(job.params.filters ?? [], schema);
+    const search = typeof job.params.search === "string" ? job.params.search : "";
+    for await (const batch of scanRecords(schema, { departmentIds: departmentFilter(user, schema), search, filters })) {
       const labels = await relationLabels(user, schema, batch);
       for (const record of batch) {
         await write([

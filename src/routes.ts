@@ -55,6 +55,7 @@ r.post("/table/:collection", requireAuth, handle(records.createHandler));
 // these must come before "/table/:collection/:id"
 r.get("/table/:collection/options", requireAuth, handle(records.optionsHandler));
 r.post("/table/:collection/export", requireAuth, handle(jobs.startExportHandler));
+r.post("/table/:collection/bulk-delete", requireAuth, handle(records.bulkDeleteHandler));
 r.post("/table/:collection/import", requireAuth, handle(jobs.startImportHandler));
 r.get("/table/:collection/:id", requireAuth, handle(records.getHandler));
 r.put("/table/:collection/:id", requireAuth, handle(records.updateHandler));
