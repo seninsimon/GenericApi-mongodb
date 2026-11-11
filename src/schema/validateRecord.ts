@@ -74,6 +74,22 @@ function coerce(column: Column, value: unknown): unknown {
       if (typeof value !== "string") throw `must be a ${what} id`;
       return value;
     }
+    case "choice": {
+      // matched to an option's exact label ignoring case/spaces; whether it
+      // is an option at all is checked in checkChoices
+      const canonical = (v: unknown) => {
+        if (typeof v === "number") v = String(v);
+        if (typeof v !== "string") throw "must be one of its options";
+        const trimmed = v.trim();
+        return column.options?.find((o) => o.label.toLowerCase() === trimmed.toLowerCase())?.label ?? trimmed;
+      };
+      if (column.multiple) {
+        const list = Array.isArray(value) ? value : value === "" ? [] : [value];
+        return [...new Set(list.map(canonical).filter(Boolean))];
+      }
+      const one = canonical(value);
+      return one === "" ? null : one;
+    }
     case "image":
     case "file": {
       if (value === "") return null;
@@ -104,6 +120,27 @@ export function coerceValues(schema: TableSchema, payload: Record<string, unknow
     }
   }
   return { values, errors };
+}
+
+// Choice values must be one of the column's options. Values the record
+// already had are fine (an option removed later stays on old records until
+// someone changes that field).
+export function checkChoices(schema: TableSchema, values: RecordData, previous: RecordData = {}): Errors {
+  const errors: Errors = {};
+  for (const column of schema.columns) {
+    if (column.type !== "choice" || !(column.name in values)) continue;
+    const allowed = new Set([
+      ...(column.options ?? []).map((o) => o.label),
+      ...([] as unknown[]).concat(previous[column.name] ?? []).filter((v): v is string => typeof v === "string"),
+    ]);
+    const bad = ([] as unknown[]).concat(values[column.name] ?? []).find((v) => typeof v === "string" && !allowed.has(v));
+    if (bad !== undefined) {
+      const options = (column.options ?? []).map((o) => o.label);
+      const list = options.length <= 8 ? `: ${options.join(", ")}` : "";
+      errors[column.name] = `"${String(bad)}" is not an option for ${column.label || column.name}${list ? ` (choose${list})` : ""}`;
+    }
+  }
+  return errors;
 }
 
 // Required fields must be filled in the final (merged) record.

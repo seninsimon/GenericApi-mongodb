@@ -5,7 +5,8 @@ import type { Column } from "../types.js";
 //   header = column labels (import also accepts names), plus "Visible to" (the
 //   record's department; only for tables shared with several departments;
 //   import also accepts the old header "Department")
-//   multiple values (multi-relations, images, files) separated by ";"
+//   multiple values (multi-relations, several choices, images, files) separated by ";"
+//   choices as the option label (import ignores case)
 //   relations exported as the linked record's display label (import also accepts ids)
 //   users exported as their name (import also accepts usernames and ids)
 //   department columns exported as the department name (import also accepts ids)
@@ -39,6 +40,7 @@ export function formatCell(column: Column, value: unknown, labels?: Map<string, 
       break;
     case "images":
     case "files":
+    case "choice":
       text = list.map(String).join(LIST_SEPARATOR);
       break;
     case "boolean":
@@ -78,6 +80,8 @@ export function parseCell(column: Column, raw: string): unknown {
     case "images":
     case "files":
       return splitList(cell);
+    case "choice":
+      return column.multiple ? splitList(cell) : cell;
     default:
       return cell;
   }

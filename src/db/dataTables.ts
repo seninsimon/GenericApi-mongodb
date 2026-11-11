@@ -68,6 +68,11 @@ export const forgetDataTable = (tableName: string) => ensured.delete(tableName);
 // exactly the same expression, so the planner can use them.
 export const sortExpression = (column: Column, alias = "t"): string => {
   const field = `${alias ? `${alias}.` : ""}data ->> ${quoteLiteral(column.name)}`;
+  if (column.type === "choice") {
+    // in the options' order (To do, Doing, Done); removed options last
+    const labels = (column.options ?? []).map((o) => quoteLiteral(o.label)).join(", ");
+    return labels ? `array_position(ARRAY[${labels}]::text[], ${field})` : `(${field})`;
+  }
   return column.type === "number" ? `erp_try_numeric(${field})` : `(${field})`;
 };
 

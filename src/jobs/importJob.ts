@@ -8,7 +8,7 @@ import { findByLabels, getRecordsByIds, insertRecords } from "../repo/recordRepo
 import { departmentNames, findActiveUsers, getUserById } from "../repo/userRepo.js";
 import { columnByNameOrLabel, pickDisplayField } from "../schema/columns.js";
 import { getSchema } from "../schema/schemaRepo.js";
-import { checkRequired, coerceValues } from "../schema/validateRecord.js";
+import { checkChoices, checkRequired, coerceValues } from "../schema/validateRecord.js";
 import { storage } from "../storage.js";
 import type { Column, CurrentUser, RecordData, TableSchema } from "../types.js";
 import { CREATED_BY_HEADER, DEPARTMENT_HEADER, LEGACY_DEPARTMENT_HEADER, parseCell } from "./csv.js";
@@ -180,7 +180,11 @@ export async function runImport(job: Job) {
     for (const row of batch) {
       const messages = [...(problems.get(row.line) ?? [])];
       const { values, errors: fieldErrors } = coerceValues(schema, row.payload);
-      messages.push(...Object.values(fieldErrors), ...Object.values(checkRequired(schema, values)));
+      messages.push(
+        ...Object.values(fieldErrors),
+        ...Object.values(checkRequired(schema, values)),
+        ...Object.values(checkChoices(schema, values))
+      );
 
       let departmentId: string | null | undefined = defaultDepartment;
       if (row.department) {

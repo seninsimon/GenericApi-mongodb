@@ -18,9 +18,9 @@ import {
   type ListOptions,
 } from "../repo/recordRepo.js";
 import { parseFilters } from "../schema/filters.js";
-import { columnByNameOrLabel, FILE_COLUMN_TYPES, INDEXABLE_TYPES, pickDisplayField } from "../schema/columns.js";
+import { columnByNameOrLabel, FILE_COLUMN_TYPES, isSortable, pickDisplayField } from "../schema/columns.js";
 import { getSchema } from "../schema/schemaRepo.js";
-import { checkRelations, checkRequired, coerceValues } from "../schema/validateRecord.js";
+import { checkChoices, checkRelations, checkRequired, coerceValues } from "../schema/validateRecord.js";
 import { deleteUploads } from "../storage.js";
 import type { Action, CurrentUser, RecordData, TableSchema } from "../types.js";
 import { htmlToText } from "../lib/text.js";
@@ -179,7 +179,7 @@ function resolveSort(schema: TableSchema, raw: unknown): ListOptions["sort"] {
   if (raw === "_updatedAt") return "_updatedAt";
   if (typeof raw !== "string" || !raw) return null;
   const column = columnByNameOrLabel(schema, raw);
-  return column && INDEXABLE_TYPES.includes(column.type) ? column : null;
+  return column && isSortable(column) ? column : null;
 }
 
 /* ---------------- relation options ---------------- */
@@ -268,7 +268,7 @@ export async function createHandler(req: Request, res: Response) {
   const payload = (req.body ?? {}) as Record<string, unknown>;
 
   const { values, errors } = coerceValues(schema, payload);
-  throwIfErrors({ ...errors, ...checkRequired(schema, values) });
+  throwIfErrors({ ...errors, ...checkRequired(schema, values), ...checkChoices(schema, values) });
   const departmentId = resolveDepartment(user, schema, payload._departmentId, true) ?? null;
   throwIfErrors(await checkRelations(user, schema, values));
 
@@ -309,7 +309,7 @@ export async function updateHandler(req: Request, res: Response) {
     if (!current) throw new HttpError(404, "Record not found");
 
     const merged: RecordData = { ...current.data, ...values };
-    throwIfErrors(checkRequired(schema, merged));
+    throwIfErrors({ ...checkRequired(schema, merged), ...checkChoices(schema, values, current.data) });
     throwIfErrors(await checkRelations(user, schema, values, current.data));
 
     await updateRecord(schema.tableName, id, values, { scope: ALL_RECORDS, newDepartmentId }, client);

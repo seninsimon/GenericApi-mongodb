@@ -6,6 +6,7 @@ import { HttpError } from "../lib/http.js";
 import { logger } from "../lib/logger.js";
 import { removeTableFromRoles } from "../repo/userRepo.js";
 import type { Column, TableSchema } from "../types.js";
+import { distinctTextValues, rewriteChoiceValues } from "./choiceValues.js";
 import { applyColumnUpdate, normalizeColumn, validateTableName } from "./columns.js";
 
 /* ============================ cache ============================ */
@@ -137,7 +138,12 @@ export async function createTable(input: { tableName: unknown; columns?: unknown
 }
 
 // Read-modify-write of a table's column list, with the row locked.
-async function changeColumns(tableName: string, change: (columns: Column[]) => Column[]): Promise<TableSchema> {
+// `afterWrite` runs in the same transaction (e.g. to update stored values).
+async function changeColumns(
+  tableName: string,
+  change: (columns: Column[]) => Column[],
+  afterWrite?: (client: pg.PoolClient) => Promise<void>
+): Promise<TableSchema> {
   await withTransaction(async (client) => {
     const { rows } = await query<{ columns: Record<string, unknown>[] }>(
       `SELECT columns FROM table_schemas WHERE table_name = $1 FOR UPDATE`,
@@ -151,6 +157,7 @@ async function changeColumns(tableName: string, change: (columns: Column[]) => C
       [tableName, JSON.stringify(change(current))],
       client
     );
+    await afterWrite?.(client);
   });
   await invalidateSchemas();
   const schema = (await getSchema(tableName))!;
@@ -174,17 +181,43 @@ export async function addColumn(tableName: string, input: Record<string, unknown
   return { schema, column: added };
 }
 
+// A Text column can have at most this many different values to become a Choice.
+export const MAX_CHOICE_CONVERSION = 50;
+
 export async function updateColumn(tableName: string, columnName: string, payload: Record<string, unknown>) {
   let before: Column | undefined;
   let after: Column | undefined;
-  const schema = await changeColumns(tableName, (columns) => {
-    const index = columns.findIndex((c) => c.name === columnName);
-    if (index === -1) throw new HttpError(404, "Column not found");
-    before = columns[index];
-    after = applyColumnUpdate(columns[index], payload);
-    return columns.map((c, i) => (i === index ? after! : c));
-  });
-  return { schema, before: before!, after: after! };
+  let rewritten = 0;
+
+  // Text -> Choice with no options given: use the values already in the column
+  const existing = (await getSchema(tableName))?.columns.find((c) => c.name === columnName);
+  if (existing && existing.type !== "choice" && payload.type === "choice" && !(Array.isArray(payload.options) && payload.options.length)) {
+    const values = await distinctTextValues(tableName, columnName, MAX_CHOICE_CONVERSION + 1);
+    if (values.length > MAX_CHOICE_CONVERSION) {
+      throw new HttpError(
+        400,
+        `"${existing.label || existing.name}" has more than ${MAX_CHOICE_CONVERSION} different values, too many for a Choice`
+      );
+    }
+    payload = { ...payload, options: values };
+  }
+
+  const schema = await changeColumns(
+    tableName,
+    (columns) => {
+      const index = columns.findIndex((c) => c.name === columnName);
+      if (index === -1) throw new HttpError(404, "Column not found");
+      before = columns[index];
+      after = applyColumnUpdate(columns[index], payload);
+      return columns.map((c, i) => (i === index ? after! : c));
+    },
+    async (client) => {
+      if (before!.type === "choice" || after!.type === "choice") {
+        rewritten = await rewriteChoiceValues(tableName, before!, after!, client);
+      }
+    }
+  );
+  return { schema, before: before!, after: after!, rewritten };
 }
 
 export async function deleteColumn(tableName: string, columnName: string) {

@@ -140,14 +140,20 @@ export async function addColumnHandler(req: Request, res: Response) {
 
 export async function updateColumnHandler(req: Request, res: Response) {
   const tableName = param(req, "table");
-  const { before, after } = await updateColumn(tableName, param(req, "name"), req.body ?? {});
-  const changes = Object.fromEntries(
+  const { before, after, rewritten } = await updateColumn(tableName, param(req, "name"), req.body ?? {});
+  const changes: Record<string, unknown> = Object.fromEntries(
     (["label", "type", "showInTable", "required", "indexed"] as const)
       .filter((k) => before[k] !== after[k])
       .map((k) => [k, { from: before[k], to: after[k] }])
   );
+  const labels = (c: typeof before) => (c.options ?? []).map((o) => o.label);
+  if (JSON.stringify(labels(before)) !== JSON.stringify(labels(after))) {
+    changes.options = { from: labels(before), to: labels(after) };
+  }
+  if (rewritten) changes.recordsUpdated = { to: rewritten };
   await audit(req, { action: "update", entity: "column", tableName, recordId: after.name, changes });
-  res.json({ message: "Column updated successfully", data: after });
+  // rewritten: records whose value was updated (renamed option, text -> choice)
+  res.json({ message: "Column updated successfully", data: after, rewritten });
 }
 
 export async function deleteColumnHandler(req: Request, res: Response) {

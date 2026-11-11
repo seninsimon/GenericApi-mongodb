@@ -10,6 +10,8 @@ export const COLUMN_TYPES = [
   "user",
   // one of the company's departments (data, e.g. "Works in"; not record access)
   "department",
+  // one (or with `multiple`, several) of a fixed list of options, e.g. Status
+  "choice",
   "image",
   "images",
   "file",
@@ -19,6 +21,14 @@ export const COLUMN_TYPES = [
 ] as const;
 
 export type ColumnType = (typeof COLUMN_TYPES)[number];
+
+// An option of a "choice" column. Records store the label; `id` stays the same
+// when the option is renamed, so a rename can update existing records.
+export interface ChoiceOption {
+  id: string;
+  label: string;
+  color: string;
+}
 
 export interface Column {
   _id: string;
@@ -32,6 +42,8 @@ export interface Column {
   ref: string | null;
   multiple: boolean;
   displayField?: string;
+  // "choice" columns only
+  options?: ChoiceOption[];
   fileConfig: { accept: string[]; maxSize: number; maxFiles: number };
   uploadPath: string;
 }

@@ -25,6 +25,7 @@ export type FilterOp =
   | "before"
   | "after"
   | "in"
+  | "notIn"
   | "isTrue"
   | "isFalse"
   | "isEmpty"
@@ -45,6 +46,7 @@ type Kind =
   | "relation"
   | "user"
   | "departmentColumn"
+  | "choice"
   | "file"
   | "department"
   | "createdBy";
@@ -63,6 +65,7 @@ const OPS_BY_KIND: Record<Kind, FilterOp[]> = {
   relation: ["in", "isEmpty", "isNotEmpty"],
   user: ["in", "isEmpty", "isNotEmpty"],
   departmentColumn: ["in", "isEmpty", "isNotEmpty"],
+  choice: ["in", "notIn", "isEmpty", "isNotEmpty"],
   file: ["isEmpty", "isNotEmpty"],
   department: ["in", "isEmpty"],
   createdBy: ["in", "isEmpty", "isNotEmpty"],
@@ -82,6 +85,8 @@ const kindOf = (column: Column): Kind => {
       return "user";
     case "department":
       return "departmentColumn";
+    case "choice":
+      return "choice";
     case "image":
     case "images":
     case "file":
@@ -137,8 +142,11 @@ export function parseFilters(raw: unknown, schema: TableSchema, viewer: Viewer =
         throw new HttpError(400, `Filter on "${f.field}" needs a date (YYYY-MM-DD)`);
       }
     }
-    if (f.op === "in" && (!Array.isArray(f.value) || !f.value.length || !f.value.every((v) => typeof v === "string"))) {
-      throw new HttpError(400, `Filter on "${f.field}" needs a list of ids`);
+    if (
+      (f.op === "in" || f.op === "notIn") &&
+      (!Array.isArray(f.value) || !f.value.length || !f.value.every((v) => typeof v === "string"))
+    ) {
+      throw new HttpError(400, `Filter on "${f.field}" needs a list of values`);
     }
     let value = f.value;
     if (f.op === "in" && viewer) {
@@ -203,9 +211,12 @@ export function filterConditions(schema: TableSchema, filters: RecordFilter[], p
         return f.op === "isTrue" ? `${json} = 'true'::jsonb` : `${json} = 'false'::jsonb`;
       case "relation":
       case "user":
-      case "departmentColumn": {
+      case "departmentColumn":
+      case "choice": {
         const ids = p(f.value);
-        return `((jsonb_typeof(${json}) = 'array' AND ${json} ?| ${ids}::text[]) OR ${text} = ANY(${ids}::text[]))`;
+        const match = `((jsonb_typeof(${json}) = 'array' AND ${json} ?| ${ids}::text[]) OR ${text} = ANY(${ids}::text[]))`;
+        // "is not": also records with no value
+        return f.op === "notIn" ? `NOT COALESCE(${match}, FALSE)` : match;
       }
       default:
         return "TRUE";
