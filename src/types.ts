@@ -6,6 +6,8 @@ export const COLUMN_TYPES = [
   "date",
   "boolean",
   "relation",
+  // a person: the _id of a user account
+  "user",
   "image",
   "images",
   "file",
@@ -71,6 +73,8 @@ export interface StoredRecord {
   _id: string;
   data: RecordData;
   departmentId: string | null;
+  // user who created the record (null for records created before this was tracked, or by the system)
+  createdBy?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
 }

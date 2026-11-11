@@ -17,6 +17,7 @@ type Row = {
   _id: string;
   data: RecordData;
   department_id: string | null;
+  created_by?: string | null;
   created_at?: Date;
   updated_at?: Date;
 };
@@ -24,6 +25,7 @@ const toStored = (row: Row): StoredRecord => ({
   _id: row._id,
   data: row.data,
   departmentId: row.department_id,
+  createdBy: row.created_by ?? null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -92,7 +94,7 @@ export async function listRecords(schema: TableSchema, options: ListOptions): Pr
     const { total, totalIsEstimate } = await countRecords(table, where, params);
     const offset = (options.page - 1) * options.limit;
     const { rows } = await query<Row & { department_name: string | null }>(
-      `SELECT t._id, t.data, t.department_id, t.created_at, t.updated_at, d.name AS department_name
+      `SELECT t._id, t.data, t.department_id, t.created_by, t.created_at, t.updated_at, d.name AS department_name
        FROM ${table} t
        LEFT JOIN departments d ON d._id = t.department_id
        ${where}
@@ -194,7 +196,7 @@ export const getRecord = (tableName: string, id: string, departmentIds: string[]
   orEmpty(async () => {
     const params: unknown[] = [id];
     const { rows } = await query<Row & { department_name: string | null }>(
-      `SELECT t._id, t.data, t.department_id, t.created_at, t.updated_at, d.name AS department_name
+      `SELECT t._id, t.data, t.department_id, t.created_by, t.created_at, t.updated_at, d.name AS department_name
        FROM ${dataTable(tableName)} t LEFT JOIN departments d ON d._id = t.department_id
        WHERE t._id = $1 AND ${departmentScope(params, departmentIds)}`,
       params,
@@ -203,11 +205,17 @@ export const getRecord = (tableName: string, id: string, departmentIds: string[]
     return rows[0] ? { ...toStored(rows[0]), departmentName: rows[0].department_name } : null;
   }, null as (StoredRecord & { departmentName: string | null }) | null);
 
-export async function insertRecord(tableName: string, data: RecordData, departmentId: string | null, db?: Db) {
+export async function insertRecord(
+  tableName: string,
+  data: RecordData,
+  departmentId: string | null,
+  createdBy: string | null,
+  db?: Db
+) {
   await ensureDataTable(tableName);
   const { rows } = await query<{ _id: string }>(
-    `INSERT INTO ${dataTable(tableName)} (data, department_id) VALUES ($1::jsonb, $2) RETURNING _id`,
-    [JSON.stringify(data), departmentId],
+    `INSERT INTO ${dataTable(tableName)} (data, department_id, created_by) VALUES ($1::jsonb, $2, $3) RETURNING _id`,
+    [JSON.stringify(data), departmentId, createdBy],
     db
   );
   return rows[0]._id;
@@ -217,14 +225,15 @@ export async function insertRecord(tableName: string, data: RecordData, departme
 export async function insertRecords(
   tableName: string,
   records: { data: RecordData; departmentId: string | null }[],
+  createdBy: string | null,
   db?: Db
 ) {
   if (!records.length) return 0;
   await ensureDataTable(tableName);
   const { rowCount } = await query(
-    `INSERT INTO ${dataTable(tableName)} (data, department_id)
-     SELECT d, dep FROM unnest($1::jsonb[], $2::text[]) AS r(d, dep)`,
-    [records.map((r) => JSON.stringify(r.data)), records.map((r) => r.departmentId)],
+    `INSERT INTO ${dataTable(tableName)} (data, department_id, created_by)
+     SELECT d, dep, $3 FROM unnest($1::jsonb[], $2::text[]) AS r(d, dep)`,
+    [records.map((r) => JSON.stringify(r.data)), records.map((r) => r.departmentId), createdBy],
     db
   );
   return rowCount ?? 0;
@@ -323,7 +332,7 @@ export async function* scanRecords(
       async () =>
         (
           await query<Row & { created_at: Date; department_name: string | null }>(
-            `SELECT t._id, t.data, t.department_id, t.created_at, d.name AS department_name
+            `SELECT t._id, t.data, t.department_id, t.created_by, t.created_at, d.name AS department_name
              FROM ${dataTable(tableName)} t LEFT JOIN departments d ON d._id = t.department_id
              WHERE ${conditions.join(" AND ")}
              ORDER BY t.created_at, t._id

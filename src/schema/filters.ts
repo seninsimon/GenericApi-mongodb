@@ -5,8 +5,10 @@ import type { Column, TableSchema } from "../types.js";
 // Column filters for record lists and exports.
 //
 // Sent as ?filters=<JSON array> of { field, op, value?, value2? }.
-// `field` is a column name, or "_department". Which `op`s are allowed depends
-// on the column type (see OPS_BY_KIND).
+// `field` is a column name, "_department" or "_createdBy". Which `op`s are
+// allowed depends on the column type (see OPS_BY_KIND). For user columns and
+// "_createdBy", the value "$me" stands for the user looking at the list, so a
+// saved "Assigned to: me" link works for everyone.
 
 export type FilterOp =
   | "contains"
@@ -33,7 +35,9 @@ export interface RecordFilter {
   value2?: unknown;
 }
 
-type Kind = "text" | "number" | "date" | "boolean" | "relation" | "file" | "department";
+type Kind = "text" | "number" | "date" | "boolean" | "relation" | "user" | "file" | "department" | "createdBy";
+
+export const ME = "$me";
 
 const OPS_BY_KIND: Record<Kind, FilterOp[]> = {
   text: ["contains", "notContains", "eq", "neq", "isEmpty", "isNotEmpty"],
@@ -41,8 +45,10 @@ const OPS_BY_KIND: Record<Kind, FilterOp[]> = {
   date: ["eq", "before", "after", "between", "isEmpty", "isNotEmpty"],
   boolean: ["isTrue", "isFalse", "isEmpty"],
   relation: ["in", "isEmpty", "isNotEmpty"],
+  user: ["in", "isEmpty", "isNotEmpty"],
   file: ["isEmpty", "isNotEmpty"],
   department: ["in", "isEmpty"],
+  createdBy: ["in", "isEmpty", "isNotEmpty"],
 };
 
 const kindOf = (column: Column): Kind => {
@@ -55,6 +61,8 @@ const kindOf = (column: Column): Kind => {
       return "boolean";
     case "relation":
       return "relation";
+    case "user":
+      return "user";
     case "image":
     case "images":
     case "file":
@@ -70,7 +78,9 @@ const isDate = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{
 const isNumber = (v: unknown) => v !== "" && v !== null && Number.isFinite(Number(v));
 
 // Parse and validate the ?filters= query value against the table's columns.
-export function parseFilters(raw: unknown, schema: TableSchema): RecordFilter[] {
+// `userId` replaces "$me" in user filters. Without it "$me" is kept as is
+// (stored export jobs fill it in later for the user who started them).
+export function parseFilters(raw: unknown, schema: TableSchema, userId: string | null = null): RecordFilter[] {
   if (raw === undefined || raw === "" || raw === null) return [];
   let list: unknown;
   try {
@@ -87,7 +97,7 @@ export function parseFilters(raw: unknown, schema: TableSchema): RecordFilter[] 
       throw new HttpError(400, "Each filter needs a field and an op");
     }
     const kind: Kind | null =
-      f.field === "_department" ? "department" : (() => {
+      f.field === "_department" ? "department" : f.field === "_createdBy" ? "createdBy" : (() => {
         const column = schema.columns.find((c) => c.name === f.field);
         return column ? kindOf(column) : null;
       })();
@@ -111,7 +121,11 @@ export function parseFilters(raw: unknown, schema: TableSchema): RecordFilter[] 
     if (f.op === "in" && (!Array.isArray(f.value) || !f.value.length || !f.value.every((v) => typeof v === "string"))) {
       throw new HttpError(400, `Filter on "${f.field}" needs a list of ids`);
     }
-    return { field: f.field, op: f.op, value: f.value, value2: f.value2 };
+    const value =
+      f.op === "in" && (kind === "user" || kind === "createdBy")
+        ? (f.value as string[]).map((v) => (v === ME && userId ? userId : v))
+        : f.value;
+    return { field: f.field, op: f.op, value, value2: f.value2 };
   });
 }
 
@@ -128,6 +142,11 @@ export function filterConditions(schema: TableSchema, filters: RecordFilter[], p
   return filters.map((f) => {
     if (f.field === "_department") {
       return f.op === "isEmpty" ? "t.department_id IS NULL" : `t.department_id = ANY(${p(f.value)}::text[])`;
+    }
+    if (f.field === "_createdBy") {
+      if (f.op === "isEmpty") return "t.created_by IS NULL";
+      if (f.op === "isNotEmpty") return "t.created_by IS NOT NULL";
+      return `t.created_by = ANY(${p(f.value)}::text[])`;
     }
 
     const column = schema.columns.find((c) => c.name === f.field)!;
@@ -161,7 +180,8 @@ export function filterConditions(schema: TableSchema, filters: RecordFilter[], p
       }
       case "boolean":
         return f.op === "isTrue" ? `${json} = 'true'::jsonb` : `${json} = 'false'::jsonb`;
-      case "relation": {
+      case "relation":
+      case "user": {
         const ids = p(f.value);
         return `((jsonb_typeof(${json}) = 'array' AND ${json} ?| ${ids}::text[]) OR ${text} = ANY(${ids}::text[]))`;
       }

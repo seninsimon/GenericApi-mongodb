@@ -5,13 +5,13 @@ import { withTransaction } from "../db/pool.js";
 import { audit } from "../repo/auditRepo.js";
 import { setProgress, type Job, type JobResult } from "../repo/jobRepo.js";
 import { findByLabels, getRecordsByIds, insertRecords } from "../repo/recordRepo.js";
-import { getUserById } from "../repo/userRepo.js";
+import { findActiveUsers, getUserById } from "../repo/userRepo.js";
 import { columnByNameOrLabel, pickDisplayField } from "../schema/columns.js";
 import { getSchema } from "../schema/schemaRepo.js";
 import { checkRequired, coerceValues } from "../schema/validateRecord.js";
 import { storage } from "../storage.js";
 import type { Column, CurrentUser, RecordData, TableSchema } from "../types.js";
-import { DEPARTMENT_HEADER, parseCell } from "./csv.js";
+import { CREATED_BY_HEADER, DEPARTMENT_HEADER, parseCell } from "./csv.js";
 
 const BATCH_SIZE = 500;
 const MAX_REPORTED_ERRORS = 1000;
@@ -62,6 +62,39 @@ async function resolveRelations(user: CurrentUser, schema: TableSchema, rows: Pa
   return problems;
 }
 
+// Map each user cell (name, username or id) to an active user's id.
+async function resolveUsers(schema: TableSchema, rows: ParsedRow[], problems: Map<number, string[]>) {
+  const complain = (line: number, message: string) => problems.set(line, [...(problems.get(line) ?? []), message]);
+
+  for (const column of schema.columns) {
+    if (column.type !== "user") continue;
+    const cells = rows.filter((r) => Array.isArray(r.payload[column.name]));
+    if (!cells.length) continue;
+    const label = column.label || column.name;
+
+    const found = await findActiveUsers(cells.flatMap((r) => r.payload[column.name] as string[]));
+    const lookup = (value: string) => {
+      const v = value.trim().toLowerCase();
+      const byId = found.filter((u) => u.value === value.trim());
+      if (byId.length) return byId;
+      const byUsername = found.filter((u) => u.username.toLowerCase() === v);
+      return byUsername.length ? byUsername : found.filter((u) => u.label.trim().toLowerCase() === v);
+    };
+
+    for (const row of cells) {
+      const ids: string[] = [];
+      for (const value of row.payload[column.name] as string[]) {
+        const matches = lookup(value);
+        if (matches.length === 1) ids.push(matches[0].value);
+        else if (matches.length) complain(row.line, `${label}: "${value}" matches several people, use the username`);
+        else complain(row.line, `${label}: no active user "${value}"`);
+      }
+      if (!column.multiple && ids.length > 1) complain(row.line, `${label}: only one person allowed`);
+      row.payload[column.name] = column.multiple ? ids : (ids[0] ?? null);
+    }
+  }
+}
+
 export async function runImport(job: Job) {
   const user = await getUserById(job.userId);
   if (!user?.isActive) throw new Error("The user who started this import no longer has access");
@@ -92,6 +125,8 @@ export async function runImport(job: Job) {
     headers.map((h) => {
       const name = h.trim();
       if (name.toLowerCase() === DEPARTMENT_HEADER.toLowerCase()) return DEPARTMENT_KEY;
+      // exported for information; always set to the importing user
+      if (name.toLowerCase() === CREATED_BY_HEADER.toLowerCase() && !columnByNameOrLabel(schema, name)) return false;
       const column = columnByNameOrLabel(schema, name);
       if (column) return column.name;
       ignoredHeaders.push(name);
@@ -111,6 +146,7 @@ export async function runImport(job: Job) {
   const flush = async () => {
     if (!batch.length) return;
     const problems = await resolveRelations(user, schema, batch);
+    await resolveUsers(schema, batch, problems);
     const valid: { data: RecordData; departmentId: string | null }[] = [];
 
     for (const row of batch) {
@@ -134,7 +170,9 @@ export async function runImport(job: Job) {
       }
     }
 
-    if (valid.length) inserted += await withTransaction((client) => insertRecords(schema.tableName, valid, client));
+    if (valid.length) {
+      inserted += await withTransaction((client) => insertRecords(schema.tableName, valid, user._id, client));
+    }
     processed += batch.length;
     batch = [];
     await setProgress(job._id, processed);

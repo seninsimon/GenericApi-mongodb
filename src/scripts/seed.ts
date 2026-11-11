@@ -267,6 +267,8 @@ const TABLES: { name: string; departments: string[]; columns: Col[] }[] = [
     text("subject", "Subject", { required: true, indexed: true }), link("customer", "Customer", "companies"), link("contact", "Contact", "contacts"),
     link("product", "Product", "products"), num("priority", "Priority (1 = urgent)", { indexed: true }), text("status", "Status", { indexed: true }),
     text("channel", "Channel", { indexed: true }), date("opened_on", "Opened"), bool("resolved", "Resolved"),
+    // a "User" column: picks from the login accounts (filter "Assigned to: Me" = my queue)
+    { name: "assigned_to", label: "Assigned to", type: "user" },
     { name: "details", label: "Details", type: "textarea", ...hidden },
   ] },
 ];
@@ -314,18 +316,28 @@ const USERS: { username: string; fullName: string; role: string; departments: st
 type Row = { id: string; data: Record<string, unknown>; dept: string | null; createdAt: Date };
 const counts: Record<string, number> = {};
 
+// "Created by": a demo user who may add records to the table and belongs to
+// the record's department (filled in once the users exist)
+const creators = new Map<string, string[]>(); // `${table}|${departmentId}` -> user ids
+const userIds: Record<string, string> = {}; // username -> id
+const creatorFor = (table: string, dept: string | null) => {
+  const candidates = creators.get(`${table}|${dept}`);
+  return candidates?.length ? pick(candidates) : null;
+};
+
 async function insertRows(table: string, rows: Row[]) {
   for (let i = 0; i < rows.length; i += 2000) {
     const batch = rows.slice(i, i + 2000);
     await query(
-      `INSERT INTO ${dataTable(table)} (_id, data, department_id, created_at, updated_at)
-       SELECT * FROM unnest($1::text[], $2::jsonb[], $3::text[], $4::timestamptz[], $5::timestamptz[])`,
+      `INSERT INTO ${dataTable(table)} (_id, data, department_id, created_at, updated_at, created_by)
+       SELECT * FROM unnest($1::text[], $2::jsonb[], $3::text[], $4::timestamptz[], $5::timestamptz[], $6::text[])`,
       [
         batch.map((r) => r.id),
         batch.map((r) => JSON.stringify(r.data)),
         batch.map((r) => r.dept),
         batch.map((r) => r.createdAt),
         batch.map((r) => new Date(Math.min(TODAY.getTime(), r.createdAt.getTime() + int(0, 30) * 86_400_000))),
+        batch.map((r) => creatorFor(table, r.dept)),
       ]
     );
   }
@@ -380,7 +392,7 @@ async function main() {
   }
   const passwordHash = await hashPassword(DEMO_PASSWORD);
   for (const u of USERS) {
-    await createUser({
+    const created = await createUser({
       username: u.username,
       fullName: u.fullName,
       email: `${u.username}@zenin-demo.example`,
@@ -388,6 +400,15 @@ async function main() {
       roleId: roleIds[u.role],
       departmentIds: [...u.departments, "All staff"].map((d) => dept[d]),
     });
+    userIds[u.username] = created._id;
+    const permissions = ROLES.find((r) => r.name === u.role)!.permissions as Record<string, { create?: boolean }>;
+    for (const [table, p] of Object.entries(permissions)) {
+      if (!p.create) continue;
+      for (const d of [...u.departments, "All staff"]) {
+        const key = `${table}|${dept[d]}`;
+        creators.set(key, [...(creators.get(key) ?? []), created._id]);
+      }
+    }
   }
   console.log(`  ${DEPARTMENTS.length} departments, ${TABLES.length} tables, ${ROLES.length} roles, ${USERS.length} users`);
 
@@ -737,6 +758,7 @@ async function main() {
         customer: company.id, contact: companyContacts.length ? pick(companyContacts).id : null, product: pick(products).id,
         priority: weighted([[1, 1], [2, 3], [3, 5], [4, 2]]), status: resolved ? "Resolved" : pick(["Open", "Waiting on customer", "In progress"]),
         channel: pick(["Email", "Phone", "WhatsApp", "Web form"]), opened_on: opened, resolved, details: "Customer reported the issue; see attached thread.",
+        assigned_to: chance(0.9) ? userIds[pick(["ayesha", "vivek"])] : null,
       },
     });
   }

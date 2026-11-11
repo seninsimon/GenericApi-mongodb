@@ -5,9 +5,12 @@ import type { Column } from "../types.js";
 //   header = column labels (import also accepts names), plus "Department"
 //   multiple values (multi-relations, images, files) separated by ";"
 //   relations exported as the linked record's display label (import also accepts ids)
+//   users exported as their name (import also accepts usernames and ids)
+//   "Created by" is exported for information and skipped on import
 //   booleans true/false (import also accepts yes/no/1/0)
 
 export const DEPARTMENT_HEADER = "Department";
+export const CREATED_BY_HEADER = "Created by";
 export const LIST_SEPARATOR = ";";
 
 // Spreadsheet apps run cells starting with = + - @ as formulas; prefix such
@@ -15,14 +18,16 @@ export const LIST_SEPARATOR = ";";
 const neutralizeFormula = (text: string) =>
   /^[=+\-@\t\r]/.test(text) && !/^-?\d+(\.\d+)?$/.test(text) ? `'${text}` : text;
 
-export function formatCell(column: Column, value: unknown, relationLabels?: Map<string, string>): string {
+// `labels` maps ids to names for relation and user columns.
+export function formatCell(column: Column, value: unknown, labels?: Map<string, string>): string {
   if (value === null || value === undefined) return "";
   const list = Array.isArray(value) ? value : [value];
 
   let text: string;
   switch (column.type) {
     case "relation":
-      text = list.map((id) => relationLabels?.get(String(id)) ?? String(id)).join(LIST_SEPARATOR);
+    case "user":
+      text = list.map((id) => labels?.get(String(id)) ?? String(id)).join(LIST_SEPARATOR);
       break;
     case "richtext":
       text = String(htmlToText(value));
@@ -63,6 +68,7 @@ export function parseCell(column: Column, raw: string): unknown {
       return TRUE_WORDS.has(word) ? true : FALSE_WORDS.has(word) ? false : cell;
     }
     case "relation":
+    case "user":
     case "images":
     case "files":
       return splitList(cell);

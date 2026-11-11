@@ -11,6 +11,10 @@ export const INDEXABLE_TYPES: ColumnType[] = ["text", "textarea", "number", "dat
 // column types that make a readable name for a record (relation labels)
 const DISPLAYABLE_TYPES: ColumnType[] = ["text", "number", "date", "textarea"];
 
+// column types whose values are ids (of records / users): their type is fixed
+// once created, since existing values can't be converted
+const ID_TYPES: ColumnType[] = ["relation", "user"];
+
 // older spellings that may still arrive from clients or stored schemas
 const TYPE_ALIASES: Record<string, ColumnType> = { richText: "richtext" };
 
@@ -81,7 +85,13 @@ export const applyColumnUpdate = (column: Column, payload: Record<string, unknow
   const updated: Column = { ...column };
   for (const key of UPDATABLE) {
     if (payload[key] === undefined) continue;
-    if (key === "type") updated.type = canonicalType(payload.type);
+    if (key === "type") {
+      const type = canonicalType(payload.type);
+      if (type !== column.type && (ID_TYPES.includes(type) || ID_TYPES.includes(column.type))) {
+        throw new HttpError(400, `A column can't be changed to or from "${ID_TYPES.includes(type) ? type : column.type}": delete it and add a new one`);
+      }
+      updated.type = type;
+    }
     else if (key === "label") updated.label = String(payload.label).trim().slice(0, 100);
     else updated[key] = Boolean(payload[key]);
   }

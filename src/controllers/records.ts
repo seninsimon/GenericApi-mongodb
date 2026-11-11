@@ -4,6 +4,7 @@ import { withTransaction } from "../db/pool.js";
 import { HttpError, intParam, param, toIdList } from "../lib/http.js";
 import { currentUser } from "../middleware/auth.js";
 import { audit, diffRecord, snapshot } from "../repo/auditRepo.js";
+import { getUserOptionsByIds, userLabel } from "../repo/userRepo.js";
 import {
   deleteRecord,
   getRecord,
@@ -87,7 +88,7 @@ export async function listHandler(req: Request, res: Response) {
 
   const result = await listRecords(schema, {
     search: typeof req.query.search === "string" ? req.query.search.slice(0, 200) : "",
-    filters: parseFilters(req.query.filters, schema),
+    filters: parseFilters(req.query.filters, schema, user._id),
     sort: resolveSort(schema, req.query.sort),
     order: req.query.order === "asc" ? "asc" : "desc",
     page,
@@ -112,6 +113,13 @@ export async function listHandler(req: Request, res: Response) {
     );
   }
 
+  // names for "User" columns and "Created by"
+  const userColumns = schema.columns.filter((c) => c.type === "user");
+  const people = await getUserOptionsByIds([
+    ...result.rows.map((r) => r.createdBy ?? ""),
+    ...result.rows.flatMap((r) => userColumns.flatMap((c) => fileUrls(r.data[c.name]))),
+  ]);
+
   const withDepartment = isAdmin(user) || allowedDepartments(user, schema).length > 1;
   const relationLabel = (labels: Map<string, string> | undefined, id: unknown) =>
     id ? (labels?.get(String(id)) ?? "—") : "";
@@ -124,10 +132,17 @@ export async function listHandler(req: Request, res: Response) {
       _id: row._id,
       _createdAt: row.createdAt,
       _updatedAt: row.updatedAt,
+      _createdBy: userLabel(people, row.createdBy) || null,
+      _createdById: row.createdBy ?? null,
     };
     for (const column of schema.columns) {
       const value = row.data[column.name];
       if (column.type === "richtext") out[column.name] = htmlToText(value, 160);
+      else if (column.type === "user") {
+        out[column.name] = Array.isArray(value)
+          ? value.map((id) => userLabel(people, id))
+          : userLabel(people, value) || null;
+      }
       else if (column.type === "relation") {
         const labels = relationLabels.get(column.name);
         out[column.name] = Array.isArray(value)
@@ -181,11 +196,14 @@ export async function getHandler(req: Request, res: Response) {
   const schema = await loadTable(req, "view");
   const record = await getRecord(schema.tableName, param(req, "id"), departmentFilter(user, schema));
   if (!record) throw new HttpError(404, "Record not found");
+  const creator = record.createdBy ? await getUserOptionsByIds([record.createdBy]) : new Map();
   res.json({
     _id: record._id,
     ...record.data,
     _departmentId: record.departmentId,
     _departmentName: record.departmentName,
+    _createdBy: userLabel(creator, record.createdBy) || null,
+    _createdById: record.createdBy ?? null,
     _createdAt: record.createdAt,
     _updatedAt: record.updatedAt,
   });
@@ -242,7 +260,7 @@ export async function createHandler(req: Request, res: Response) {
   throwIfErrors(await checkRelations(user, schema, values));
 
   const id = await withTransaction(async (client) => {
-    const newId = await insertRecord(schema.tableName, values, departmentId, client);
+    const newId = await insertRecord(schema.tableName, values, departmentId, user._id, client);
     await audit(
       req,
       {

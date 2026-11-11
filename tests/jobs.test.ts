@@ -37,8 +37,9 @@ describe("CSV export / import jobs", async () => {
     const file = await world.user.get(`/api/jobs/${job._id}/download`);
     expect(file.headers["content-disposition"]).toMatch(/attachment/);
     const lines = file.text.replace(/^﻿/, "").trim().split(/\r?\n/);
-    expect(lines[0]).toBe("Title,Qty,OK,Owner,Department");
-    expect(lines[1]).toBe(`'=HYPERLINK(evil),-5,true,Ann,${world.dept.name}`);
+    expect(lines[0]).toBe("Title,Qty,OK,Owner,Department,Created by");
+    // the user has no full name, so "Created by" shows the username
+    expect(lines[1]).toBe(`'=HYPERLINK(evil),-5,true,Ann,${world.dept.name},${world.username}`);
   });
 
   it("imports CSV rows, resolving relations by label and reporting bad rows", async () => {
