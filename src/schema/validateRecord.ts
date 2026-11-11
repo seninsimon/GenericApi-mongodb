@@ -1,5 +1,6 @@
-import { can, departmentFilter, isAdmin } from "../auth/access.js";
+import { can, recordScope, isAdmin } from "../auth/access.js";
 import { getRecordsByIds } from "../repo/recordRepo.js";
+import { existingDepartmentIds, getUserOptionsByIds } from "../repo/userRepo.js";
 import { UPLOAD_URL_PREFIX } from "../storage.js";
 import type { Column, CurrentUser, RecordData, TableSchema } from "../types.js";
 import { getSchema } from "./schemaRepo.js";
@@ -60,14 +61,17 @@ function coerce(column: Column, value: unknown): unknown {
       }
       return value;
     }
-    case "relation": {
+    case "relation":
+    case "user":
+    case "department": {
+      const what = column.type === "relation" ? "record" : column.type;
       if (column.multiple) {
         const list = Array.isArray(value) ? value : value === "" ? [] : [value];
-        if (!list.every((v) => typeof v === "string" && v)) throw "must be a list of record ids";
+        if (!list.every((v) => typeof v === "string" && v)) throw `must be a list of ${what} ids`;
         return [...new Set(list as string[])];
       }
       if (value === "") return null;
-      if (typeof value !== "string") throw "must be a record id";
+      if (typeof value !== "string") throw `must be a ${what} id`;
       return value;
     }
     case "image":
@@ -125,7 +129,8 @@ export async function checkRelations(
   const errors: Errors = {};
 
   for (const column of schema.columns) {
-    if (column.type !== "relation" || !column.ref || !(column.name in values)) continue;
+    if (!(column.name in values)) continue;
+    if (column.type !== "user" && column.type !== "department" && (column.type !== "relation" || !column.ref)) continue;
 
     const before = new Set(
       ([] as unknown[]).concat(previous[column.name] ?? []).filter((v): v is string => typeof v === "string")
@@ -136,7 +141,17 @@ export async function checkRelations(
     if (!ids.length) continue;
 
     const label = column.label || column.name;
-    const refSchema = await getSchema(column.ref);
+    if (column.type === "user") {
+      // newly chosen people must be existing, active accounts
+      const found = await getUserOptionsByIds(ids);
+      if (ids.some((id) => !found.get(id)?.isActive)) errors[column.name] = `${label}: user not found or deactivated`;
+      continue;
+    }
+    if (column.type === "department") {
+      if ((await existingDepartmentIds(ids)).length !== ids.length) errors[column.name] = `${label}: department not found`;
+      continue;
+    }
+    const refSchema = await getSchema(column.ref!);
     if (!refSchema) {
       errors[column.name] = `${label}: the linked table no longer exists`;
       continue;
@@ -146,7 +161,7 @@ export async function checkRelations(
       continue;
     }
 
-    const found = await getRecordsByIds(refSchema.tableName, ids, departmentFilter(user, refSchema));
+    const found = await getRecordsByIds(refSchema.tableName, ids, recordScope(user, refSchema));
     if (found.length !== ids.length) errors[column.name] = `${label}: linked record not found`;
   }
   return errors;

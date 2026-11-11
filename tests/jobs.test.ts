@@ -24,7 +24,7 @@ describe("CSV export / import jobs", async () => {
   const ann = (await admin.post(`/api/table/${people}`, { name: "Ann", _departmentId: world.dept._id })).body.data.insertedId;
   const t = world.table;
 
-  it("exports a table to CSV with labels, departments and formula-safe cells", async () => {
+  it("exports a table to CSV with labels and formula-safe cells", async () => {
     await world.user.post(`/api/table/${t}`, { title: "=HYPERLINK(evil)", qty: -5, ok: true, owner: ann }).expect(200);
     const start = await world.user.post(`/api/table/${t}/export`);
     expect(start.status).toBe(202);
@@ -37,8 +37,10 @@ describe("CSV export / import jobs", async () => {
     const file = await world.user.get(`/api/jobs/${job._id}/download`);
     expect(file.headers["content-disposition"]).toMatch(/attachment/);
     const lines = file.text.replace(/^﻿/, "").trim().split(/\r?\n/);
-    expect(lines[0]).toBe("Title,Qty,OK,Owner,Department");
-    expect(lines[1]).toBe(`'=HYPERLINK(evil),-5,true,Ann,${world.dept.name}`);
+    // one department: no "Visible to" column. The user has no full name, so
+    // "Created by" shows the username
+    expect(lines[0]).toBe("Title,Qty,OK,Owner,Created by");
+    expect(lines[1]).toBe(`'=HYPERLINK(evil),-5,true,Ann,${world.username}`);
   });
 
   it("imports CSV rows, resolving relations by label and reporting bad rows", async () => {

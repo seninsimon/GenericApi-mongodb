@@ -27,6 +27,7 @@ export async function ensureDataTable(tableName: string): Promise<void> {
       _id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
       data           JSONB NOT NULL DEFAULT '{}'::jsonb,
       department_id  TEXT REFERENCES departments(_id) ON DELETE SET NULL,
+      created_by     TEXT,
       created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
     )
@@ -36,6 +37,12 @@ export async function ensureDataTable(tableName: string): Promise<void> {
     ALTER TABLE ${table}
     ADD COLUMN IF NOT EXISTS department_id TEXT REFERENCES departments(_id) ON DELETE SET NULL
   `);
+  // "Created by" (see migrations/003_created_by.sql, which uses the same index name)
+  await query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS created_by TEXT`);
+  await query(
+    `CREATE INDEX IF NOT EXISTS ${quoteIdent(`${createHash("md5").update(tableName).digest("hex").slice(0, 16)}_createdby_idx`)}
+     ON ${table} (created_by)`
+  );
   // (20-character prefix: the name used before, so existing tables keep one index)
   await query(
     `CREATE INDEX IF NOT EXISTS ${quoteIdent(`${hash(tableName, 20)}_department_idx`)} ON ${table} (department_id)`

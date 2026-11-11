@@ -1,10 +1,12 @@
 import type { Request, Response } from "express";
-import { allowedDepartments, can, departmentFilter, isAdmin } from "../auth/access.js";
+import { ALL_RECORDS, allowedDepartments, can, isAdmin, recordScope } from "../auth/access.js";
 import { withTransaction } from "../db/pool.js";
 import { HttpError, intParam, param, toIdList } from "../lib/http.js";
 import { currentUser } from "../middleware/auth.js";
 import { audit, diffRecord, snapshot } from "../repo/auditRepo.js";
+import { departmentLabel, departmentNames, getUserOptionsByIds, userLabel } from "../repo/userRepo.js";
 import {
+  countUnassigned,
   deleteRecord,
   getRecord,
   getRecordOptions,
@@ -87,12 +89,12 @@ export async function listHandler(req: Request, res: Response) {
 
   const result = await listRecords(schema, {
     search: typeof req.query.search === "string" ? req.query.search.slice(0, 200) : "",
-    filters: parseFilters(req.query.filters, schema),
+    filters: parseFilters(req.query.filters, schema, user),
     sort: resolveSort(schema, req.query.sort),
     order: req.query.order === "asc" ? "asc" : "desc",
     page,
     limit,
-    departmentIds: departmentFilter(user, schema),
+    scope: recordScope(user, schema),
   });
 
   // resolve relation ids to display names, only for records the user may see
@@ -105,14 +107,29 @@ export async function listHandler(req: Request, res: Response) {
     if (!refSchema || !can(user, refSchema, "view")) continue;
 
     const display = pickDisplayField(refSchema, column.displayField);
-    const found = await getRecordsByIds(refSchema.tableName, [...ids], departmentFilter(user, refSchema));
+    const found = await getRecordsByIds(refSchema.tableName, [...ids], recordScope(user, refSchema));
     relationLabels.set(
       column.name,
       new Map(found.map((r) => [r._id, String((display === "_id" ? r._id : r.data[display]) || r._id)]))
     );
   }
 
-  const withDepartment = isAdmin(user) || allowedDepartments(user, schema).length > 1;
+  // names for "User" columns and "Created by"
+  const userColumns = schema.columns.filter((c) => c.type === "user");
+  const people = await getUserOptionsByIds([
+    ...result.rows.map((r) => r.createdBy ?? ""),
+    ...result.rows.flatMap((r) => userColumns.flatMap((c) => fileUrls(r.data[c.name]))),
+  ]);
+
+  const departments = schema.columns.some((c) => c.type === "department") ? await departmentNames() : new Map();
+
+  // "Visible to" only matters when the table is shared with several
+  // departments (with one, every record is in it), and only to people who can
+  // see more than one of them. Admins also see it while some records are
+  // "admins only" (e.g. after their department was deleted), so they can spot them.
+  const withDepartment =
+    (schema.departments.length > 1 && (isAdmin(user) || allowedDepartments(user, schema).length > 1)) ||
+    (isAdmin(user) && (await countUnassigned(schema.tableName)) > 0);
   const relationLabel = (labels: Map<string, string> | undefined, id: unknown) =>
     id ? (labels?.get(String(id)) ?? "—") : "";
 
@@ -124,10 +141,21 @@ export async function listHandler(req: Request, res: Response) {
       _id: row._id,
       _createdAt: row.createdAt,
       _updatedAt: row.updatedAt,
+      _createdBy: userLabel(people, row.createdBy) || null,
+      _createdById: row.createdBy ?? null,
     };
     for (const column of schema.columns) {
       const value = row.data[column.name];
       if (column.type === "richtext") out[column.name] = htmlToText(value, 160);
+      else if (column.type === "department") {
+        out[column.name] = Array.isArray(value)
+          ? value.map((id) => departmentLabel(departments, id))
+          : departmentLabel(departments, value) || null;
+      } else if (column.type === "user") {
+        out[column.name] = Array.isArray(value)
+          ? value.map((id) => userLabel(people, id))
+          : userLabel(people, value) || null;
+      }
       else if (column.type === "relation") {
         const labels = relationLabels.get(column.name);
         out[column.name] = Array.isArray(value)
@@ -136,7 +164,7 @@ export async function listHandler(req: Request, res: Response) {
       } else out[column.name] = value ?? null;
     }
     if (withDepartment) {
-      out._department = row.departmentName ?? "Unassigned";
+      out._department = row.departmentName ?? "Admins only";
       out._departmentId = row.departmentId;
     }
     return out;
@@ -169,7 +197,7 @@ export async function optionsHandler(req: Request, res: Response) {
       search: typeof req.query.search === "string" ? req.query.search.slice(0, 200) : "",
       ids,
       limit: intParam(req.query.limit, 50, 1, 200),
-      departmentIds: departmentFilter(user, schema),
+      scope: recordScope(user, schema),
     })
   );
 }
@@ -179,13 +207,16 @@ export async function optionsHandler(req: Request, res: Response) {
 export async function getHandler(req: Request, res: Response) {
   const user = currentUser(req);
   const schema = await loadTable(req, "view");
-  const record = await getRecord(schema.tableName, param(req, "id"), departmentFilter(user, schema));
+  const record = await getRecord(schema.tableName, param(req, "id"), recordScope(user, schema));
   if (!record) throw new HttpError(404, "Record not found");
+  const creator = record.createdBy ? await getUserOptionsByIds([record.createdBy]) : new Map();
   res.json({
     _id: record._id,
     ...record.data,
     _departmentId: record.departmentId,
     _departmentName: record.departmentName,
+    _createdBy: userLabel(creator, record.createdBy) || null,
+    _createdById: record.createdBy ?? null,
     _createdAt: record.createdAt,
     _updatedAt: record.updatedAt,
   });
@@ -202,7 +233,7 @@ export async function bulkDeleteHandler(req: Request, res: Response) {
   const deleted = await withTransaction(async (client) => {
     const removed = [];
     for (const id of ids) {
-      const record = await deleteRecord(schema.tableName, id, departmentFilter(user, schema), client);
+      const record = await deleteRecord(schema.tableName, id, recordScope(user, schema), client);
       if (!record) continue;
       removed.push(record);
       await audit(
@@ -242,7 +273,7 @@ export async function createHandler(req: Request, res: Response) {
   throwIfErrors(await checkRelations(user, schema, values));
 
   const id = await withTransaction(async (client) => {
-    const newId = await insertRecord(schema.tableName, values, departmentId, client);
+    const newId = await insertRecord(schema.tableName, values, departmentId, user._id, client);
     await audit(
       req,
       {
@@ -274,14 +305,14 @@ export async function updateHandler(req: Request, res: Response) {
   const newDepartmentId = resolveDepartment(user, schema, payload._departmentId, false);
 
   const { before, after } = await withTransaction(async (client) => {
-    const current = await lockRecord(schema.tableName, id, departmentFilter(user, schema), client);
+    const current = await lockRecord(schema.tableName, id, recordScope(user, schema), client);
     if (!current) throw new HttpError(404, "Record not found");
 
     const merged: RecordData = { ...current.data, ...values };
     throwIfErrors(checkRequired(schema, merged));
     throwIfErrors(await checkRelations(user, schema, values, current.data));
 
-    await updateRecord(schema.tableName, id, values, { departmentIds: null, newDepartmentId }, client);
+    await updateRecord(schema.tableName, id, values, { scope: ALL_RECORDS, newDepartmentId }, client);
 
     const changes: Record<string, unknown> = diffRecord(current.data, merged);
     if (newDepartmentId !== undefined && newDepartmentId !== current.departmentId) {
@@ -314,7 +345,7 @@ export async function deleteHandler(req: Request, res: Response) {
   const id = param(req, "id");
 
   const deleted = await withTransaction(async (client) => {
-    const record = await deleteRecord(schema.tableName, id, departmentFilter(user, schema), client);
+    const record = await deleteRecord(schema.tableName, id, recordScope(user, schema), client);
     if (!record) throw new HttpError(404, "Record not found");
     await audit(
       req,

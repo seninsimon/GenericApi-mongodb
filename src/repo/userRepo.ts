@@ -377,3 +377,69 @@ export async function deleteDepartment(id: string) {
   const { rowCount } = await query(`DELETE FROM departments WHERE _id = $1`, [id]);
   return (rowCount ?? 0) > 0;
 }
+
+/* ---------------- people pickers ("User" columns, "Created by") ---------------- */
+
+export interface UserOption {
+  value: string;
+  label: string;
+  username: string;
+  isActive: boolean;
+}
+
+const OPTION_SELECT = `SELECT _id, username, full_name, is_active FROM users`;
+type OptionRow = { _id: string; username: string; full_name: string; is_active: boolean };
+const toOption = (r: OptionRow): UserOption => ({
+  value: r._id,
+  label: r.full_name.trim() || r.username,
+  username: r.username,
+  isActive: r.is_active,
+});
+
+// Names for user ids (any status, so old values keep showing). Missing ids = deleted users.
+export async function getUserOptionsByIds(ids: string[]): Promise<Map<string, UserOption>> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (!unique.length) return new Map();
+  const { rows } = await query<OptionRow>(`${OPTION_SELECT} WHERE _id = ANY($1::text[])`, [unique]);
+  return new Map(rows.map((r) => [r._id, toOption(r)]));
+}
+
+// Active users matching `search` (name or username), for pickers.
+export async function searchUserOptions(search: string, limit: number): Promise<UserOption[]> {
+  const pattern = `%${search.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const { rows } = await query<OptionRow>(
+    `${OPTION_SELECT}
+     WHERE is_active AND ($1 = '%%' OR full_name ILIKE $1 OR username ILIKE $1)
+     ORDER BY lower(coalesce(nullif(trim(full_name), ''), username))
+     LIMIT $2`,
+    [pattern, limit]
+  );
+  return rows.map(toOption);
+}
+
+// Active users whose id, username or full name (case-insensitive) is one of `values` (imports).
+export async function findActiveUsers(values: string[]): Promise<UserOption[]> {
+  const unique = [...new Set(values.map((v) => v.trim()).filter(Boolean))];
+  if (!unique.length) return [];
+  const lower = unique.map((v) => v.toLowerCase());
+  const { rows } = await query<OptionRow>(
+    `${OPTION_SELECT}
+     WHERE is_active AND (_id = ANY($1::text[]) OR lower(username) = ANY($2::text[]) OR lower(trim(full_name)) = ANY($2::text[]))`,
+    [unique, lower]
+  );
+  return rows.map(toOption);
+}
+
+// Display name for a user id from getUserOptionsByIds ("" for no id).
+export const userLabel = (options: Map<string, UserOption>, id: unknown): string =>
+  id ? (options.get(String(id))?.label ?? "Deleted user") : "";
+
+// Department names by id, for "Department" columns (all departments; the list is small).
+export async function departmentNames(): Promise<Map<string, string>> {
+  const { rows } = await query<{ _id: string; name: string }>(`SELECT _id, name FROM departments`);
+  return new Map(rows.map((r) => [r._id, r.name]));
+}
+
+// Display name for a department id ("" for no id).
+export const departmentLabel = (names: Map<string, string>, id: unknown): string =>
+  id ? (names.get(String(id)) ?? "Deleted department") : "";

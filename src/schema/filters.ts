@@ -5,8 +5,12 @@ import type { Column, TableSchema } from "../types.js";
 // Column filters for record lists and exports.
 //
 // Sent as ?filters=<JSON array> of { field, op, value?, value2? }.
-// `field` is a column name, or "_department". Which `op`s are allowed depends
-// on the column type (see OPS_BY_KIND).
+// `field` is a column name, "_department" (who can see the record) or
+// "_createdBy". Which `op`s are allowed depends on the column type (see
+// OPS_BY_KIND). Two values stand for the person looking at the list, so one
+// saved link works for everyone:
+//   "$me"   in user columns and "_createdBy": that user
+//   "$mine" in department columns: that user's departments
 
 export type FilterOp =
   | "contains"
@@ -33,7 +37,23 @@ export interface RecordFilter {
   value2?: unknown;
 }
 
-type Kind = "text" | "number" | "date" | "boolean" | "relation" | "file" | "department";
+type Kind =
+  | "text"
+  | "number"
+  | "date"
+  | "boolean"
+  | "relation"
+  | "user"
+  | "departmentColumn"
+  | "file"
+  | "department"
+  | "createdBy";
+
+export const ME = "$me";
+export const MINE = "$mine";
+
+// who is looking at the list (for "$me" / "$mine")
+type Viewer = { _id: string; departments: { _id: string }[] } | null;
 
 const OPS_BY_KIND: Record<Kind, FilterOp[]> = {
   text: ["contains", "notContains", "eq", "neq", "isEmpty", "isNotEmpty"],
@@ -41,8 +61,11 @@ const OPS_BY_KIND: Record<Kind, FilterOp[]> = {
   date: ["eq", "before", "after", "between", "isEmpty", "isNotEmpty"],
   boolean: ["isTrue", "isFalse", "isEmpty"],
   relation: ["in", "isEmpty", "isNotEmpty"],
+  user: ["in", "isEmpty", "isNotEmpty"],
+  departmentColumn: ["in", "isEmpty", "isNotEmpty"],
   file: ["isEmpty", "isNotEmpty"],
   department: ["in", "isEmpty"],
+  createdBy: ["in", "isEmpty", "isNotEmpty"],
 };
 
 const kindOf = (column: Column): Kind => {
@@ -55,6 +78,10 @@ const kindOf = (column: Column): Kind => {
       return "boolean";
     case "relation":
       return "relation";
+    case "user":
+      return "user";
+    case "department":
+      return "departmentColumn";
     case "image":
     case "images":
     case "file":
@@ -70,7 +97,9 @@ const isDate = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{
 const isNumber = (v: unknown) => v !== "" && v !== null && Number.isFinite(Number(v));
 
 // Parse and validate the ?filters= query value against the table's columns.
-export function parseFilters(raw: unknown, schema: TableSchema): RecordFilter[] {
+// `viewer` fills in "$me" / "$mine". Without it they're kept as they are
+// (stored export jobs fill them in later for the user who started them).
+export function parseFilters(raw: unknown, schema: TableSchema, viewer: Viewer = null): RecordFilter[] {
   if (raw === undefined || raw === "" || raw === null) return [];
   let list: unknown;
   try {
@@ -87,7 +116,7 @@ export function parseFilters(raw: unknown, schema: TableSchema): RecordFilter[] 
       throw new HttpError(400, "Each filter needs a field and an op");
     }
     const kind: Kind | null =
-      f.field === "_department" ? "department" : (() => {
+      f.field === "_department" ? "department" : f.field === "_createdBy" ? "createdBy" : (() => {
         const column = schema.columns.find((c) => c.name === f.field);
         return column ? kindOf(column) : null;
       })();
@@ -111,7 +140,13 @@ export function parseFilters(raw: unknown, schema: TableSchema): RecordFilter[] 
     if (f.op === "in" && (!Array.isArray(f.value) || !f.value.length || !f.value.every((v) => typeof v === "string"))) {
       throw new HttpError(400, `Filter on "${f.field}" needs a list of ids`);
     }
-    return { field: f.field, op: f.op, value: f.value, value2: f.value2 };
+    let value = f.value;
+    if (f.op === "in" && viewer) {
+      const list = f.value as string[];
+      if (kind === "user" || kind === "createdBy") value = list.map((v) => (v === ME ? viewer._id : v));
+      if (kind === "departmentColumn") value = list.flatMap((v) => (v === MINE ? viewer.departments.map((d) => d._id) : [v]));
+    }
+    return { field: f.field, op: f.op, value, value2: f.value2 };
   });
 }
 
@@ -128,6 +163,11 @@ export function filterConditions(schema: TableSchema, filters: RecordFilter[], p
   return filters.map((f) => {
     if (f.field === "_department") {
       return f.op === "isEmpty" ? "t.department_id IS NULL" : `t.department_id = ANY(${p(f.value)}::text[])`;
+    }
+    if (f.field === "_createdBy") {
+      if (f.op === "isEmpty") return "t.created_by IS NULL";
+      if (f.op === "isNotEmpty") return "t.created_by IS NOT NULL";
+      return `t.created_by = ANY(${p(f.value)}::text[])`;
     }
 
     const column = schema.columns.find((c) => c.name === f.field)!;
@@ -161,7 +201,9 @@ export function filterConditions(schema: TableSchema, filters: RecordFilter[], p
       }
       case "boolean":
         return f.op === "isTrue" ? `${json} = 'true'::jsonb` : `${json} = 'false'::jsonb`;
-      case "relation": {
+      case "relation":
+      case "user":
+      case "departmentColumn": {
         const ids = p(f.value);
         return `((jsonb_typeof(${json}) = 'array' AND ${json} ?| ${ids}::text[]) OR ${text} = ANY(${ids}::text[]))`;
       }

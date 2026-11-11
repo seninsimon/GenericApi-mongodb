@@ -3,6 +3,7 @@ import * as admin from "./controllers/admin.js";
 import { listAuditHandler } from "./controllers/audit.js";
 import * as auth from "./controllers/auth.js";
 import { uploadHandler } from "./controllers/files.js";
+import { departmentOptionsHandler, userOptionsHandler } from "./controllers/people.js";
 import * as jobs from "./controllers/jobs.js";
 import * as records from "./controllers/records.js";
 import * as schema from "./controllers/schema.js";
@@ -21,6 +22,10 @@ r.post("/auth/logout", handle(auth.logout));
 r.get("/auth/me", requireAuth, handle(auth.me));
 r.put("/auth/profile", requireAuth, handle(auth.updateProfile));
 r.put("/auth/password", requireAuth, handle(auth.changePassword));
+
+// ---- people picker (any logged-in user: names only) ----
+r.get("/users/options", requireAuth, handle(userOptionsHandler));
+r.get("/departments/options", requireAuth, handle(departmentOptionsHandler));
 
 // ---- users / roles / departments (admin) ----
 r.get("/users", adminOnly, handle(admin.getUsers));

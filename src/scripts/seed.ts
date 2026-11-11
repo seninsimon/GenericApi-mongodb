@@ -189,7 +189,7 @@ const TABLES: { name: string; departments: string[]; columns: Col[] }[] = [
     text("email", "Email"), text("phone", "Phone"), text("city", "City", { indexed: true }), date("last_contacted", "Last contacted"), bool("newsletter", "Newsletter"),
   ] },
   { name: "employees", departments: ["All staff"], columns: [
-    text("full_name", "Name", { required: true, indexed: true }), text("team", "Team", { indexed: true }), text("job_title", "Job title", { indexed: true }),
+    text("full_name", "Name", { required: true, indexed: true }), { name: "team", label: "Team", type: "department" }, text("job_title", "Job title", { indexed: true }),
     text("email", "Email"), text("phone", "Phone"), text("location", "Location", { indexed: true }), date("joined_on", "Joined on"), bool("active", "Active"),
     { name: "photo", label: "Photo", type: "image" },
   ] },
@@ -267,6 +267,8 @@ const TABLES: { name: string; departments: string[]; columns: Col[] }[] = [
     text("subject", "Subject", { required: true, indexed: true }), link("customer", "Customer", "companies"), link("contact", "Contact", "contacts"),
     link("product", "Product", "products"), num("priority", "Priority (1 = urgent)", { indexed: true }), text("status", "Status", { indexed: true }),
     text("channel", "Channel", { indexed: true }), date("opened_on", "Opened"), bool("resolved", "Resolved"),
+    // a "User" column: picks from the login accounts (filter "Assigned to: Me" = my queue)
+    { name: "assigned_to", label: "Assigned to", type: "user" },
     { name: "details", label: "Details", type: "textarea", ...hidden },
   ] },
 ];
@@ -277,16 +279,18 @@ const DEPARTMENTS: [string, string][] = [
   ["Support", "Customer support"], ["All staff", "Shared lists everyone can use (statuses, staff directory)"],
 ];
 
-const V = { view: true }, VC = { view: true, create: true }, VCE = { view: true, create: true, edit: true };
+const V = { view: true }, VCE = { view: true, create: true, edit: true };
 const ALL = { view: true, create: true, edit: true, delete: true };
+// expense claims are personal: staff see only their own (managers and Finance see all)
+const OWN_CLAIMS = { view: true, create: true, own: true };
 const ROLES: { name: string; description: string; permissions: Record<string, object> }[] = [
-  { name: "Sales rep", description: "Customers, contacts, deals and orders", permissions: { companies: VCE, contacts: VCE, deals: VCE, products: V, orders: VCE, support_tickets: V, expenses: VC, employees: V } },
+  { name: "Sales rep", description: "Customers, contacts, deals and orders", permissions: { companies: VCE, contacts: VCE, deals: VCE, products: V, orders: VCE, support_tickets: V, expenses: OWN_CLAIMS, employees: V } },
   { name: "Sales manager", description: "Full control of the sales pipeline", permissions: { companies: ALL, contacts: ALL, deals: ALL, products: VCE, orders: ALL, support_tickets: V, expenses: VCE, employees: V } },
-  { name: "Marketing", description: "Contacts, campaigns and projects", permissions: { companies: V, contacts: VCE, projects: VCE, tasks: VCE, time_logs: VCE, task_statuses: V, expenses: VC, employees: V } },
-  { name: "Operations", description: "Products, purchasing and delivery", permissions: { companies: V, products: VCE, orders: { view: true, edit: true }, suppliers: VCE, purchase_orders: ALL, projects: VCE, tasks: VCE, time_logs: VCE, task_statuses: V, expenses: VC, employees: V } },
+  { name: "Marketing", description: "Contacts, campaigns and projects", permissions: { companies: V, contacts: VCE, projects: VCE, tasks: VCE, time_logs: VCE, task_statuses: V, expenses: OWN_CLAIMS, employees: V } },
+  { name: "Operations", description: "Products, purchasing and delivery", permissions: { companies: V, products: VCE, orders: { view: true, edit: true }, suppliers: VCE, purchase_orders: ALL, projects: VCE, tasks: VCE, time_logs: VCE, task_statuses: V, expenses: OWN_CLAIMS, employees: V } },
   { name: "Finance", description: "Payments, payroll and expenses", permissions: { companies: V, products: V, orders: V, purchase_orders: { view: true, edit: true }, suppliers: V, payroll: VCE, expenses: ALL, employees: V } },
   { name: "HR", description: "Staff directory, payroll and leave", permissions: { employees: ALL, payroll: ALL, leave_requests: ALL, task_statuses: V } },
-  { name: "IT support", description: "Assets, helpdesk and IT projects", permissions: { assets: ALL, it_tickets: ALL, projects: ALL, tasks: ALL, time_logs: ALL, task_statuses: VCE, expenses: VC, employees: V } },
+  { name: "IT support", description: "Assets, helpdesk and IT projects", permissions: { assets: ALL, it_tickets: ALL, projects: ALL, tasks: ALL, time_logs: ALL, task_statuses: VCE, expenses: OWN_CLAIMS, employees: V } },
   { name: "Support agent", description: "Customer tickets", permissions: { support_tickets: ALL, companies: V, contacts: { view: true, edit: true }, products: V, orders: V, employees: V } },
   { name: "Executive", description: "Read-only view of everything", permissions: Object.fromEntries(TABLES.map((t) => [t.name, V])) },
 ];
@@ -314,18 +318,28 @@ const USERS: { username: string; fullName: string; role: string; departments: st
 type Row = { id: string; data: Record<string, unknown>; dept: string | null; createdAt: Date };
 const counts: Record<string, number> = {};
 
+// "Created by": a demo user who may add records to the table and belongs to
+// the record's department (filled in once the users exist)
+const creators = new Map<string, string[]>(); // `${table}|${departmentId}` -> user ids
+const userIds: Record<string, string> = {}; // username -> id
+const creatorFor = (table: string, dept: string | null) => {
+  const candidates = creators.get(`${table}|${dept}`);
+  return candidates?.length ? pick(candidates) : null;
+};
+
 async function insertRows(table: string, rows: Row[]) {
   for (let i = 0; i < rows.length; i += 2000) {
     const batch = rows.slice(i, i + 2000);
     await query(
-      `INSERT INTO ${dataTable(table)} (_id, data, department_id, created_at, updated_at)
-       SELECT * FROM unnest($1::text[], $2::jsonb[], $3::text[], $4::timestamptz[], $5::timestamptz[])`,
+      `INSERT INTO ${dataTable(table)} (_id, data, department_id, created_at, updated_at, created_by)
+       SELECT * FROM unnest($1::text[], $2::jsonb[], $3::text[], $4::timestamptz[], $5::timestamptz[], $6::text[])`,
       [
         batch.map((r) => r.id),
         batch.map((r) => JSON.stringify(r.data)),
         batch.map((r) => r.dept),
         batch.map((r) => r.createdAt),
         batch.map((r) => new Date(Math.min(TODAY.getTime(), r.createdAt.getTime() + int(0, 30) * 86_400_000))),
+        batch.map((r) => creatorFor(table, r.dept)),
       ]
     );
   }
@@ -348,14 +362,14 @@ async function main() {
   // never mix demo data into a system that already has these tables or users
   for (const t of TABLES) {
     if (await getSchema(t.name)) {
-      console.error(`Table "${t.name}" already exists. Run "pnpm db:reset" first to start from an empty system.`);
+      console.error(`Table "${t.name}" already exists. Wipe it first to start from an empty system: "pnpm db:reset" (or "./deploy.sh wipe" on a deployed server).`);
       process.exitCode = 1;
       return;
     }
   }
   for (const u of USERS) {
     if (await findUserForLogin(u.username)) {
-      console.error(`User "${u.username}" already exists. Run "pnpm db:reset" first.`);
+      console.error(`User "${u.username}" already exists. Wipe first: "pnpm db:reset" (or "./deploy.sh wipe").`);
       process.exitCode = 1;
       return;
     }
@@ -380,7 +394,7 @@ async function main() {
   }
   const passwordHash = await hashPassword(DEMO_PASSWORD);
   for (const u of USERS) {
-    await createUser({
+    const created = await createUser({
       username: u.username,
       fullName: u.fullName,
       email: `${u.username}@zenin-demo.example`,
@@ -388,6 +402,15 @@ async function main() {
       roleId: roleIds[u.role],
       departmentIds: [...u.departments, "All staff"].map((d) => dept[d]),
     });
+    userIds[u.username] = created._id;
+    const permissions = ROLES.find((r) => r.name === u.role)!.permissions as Record<string, { create?: boolean }>;
+    for (const [table, p] of Object.entries(permissions)) {
+      if (!p.create) continue;
+      for (const d of [...u.departments, "All staff"]) {
+        const key = `${table}|${dept[d]}`;
+        creators.set(key, [...(creators.get(key) ?? []), created._id]);
+      }
+    }
   }
   console.log(`  ${DEPARTMENTS.length} departments, ${TABLES.length} tables, ${ROLES.length} roles, ${USERS.length} users`);
 
@@ -402,7 +425,7 @@ async function main() {
     empRows.push({
       id, dept: dept["All staff"], createdAt: createdAround(joined),
       data: {
-        full_name: name, team, job_title: pick(JOBS[team]), email: `${name.toLowerCase().replace(/[^a-z]+/g, ".")}@zenin-demo.example`,
+        full_name: name, team: dept[team], job_title: pick(JOBS[team]), email: `${name.toLowerCase().replace(/[^a-z]+/g, ".")}@zenin-demo.example`,
         phone: `+91 9${int(100000000, 999999999)}`, location: pick(CITIES.slice(0, 8)), joined_on: joined, active: chance(0.94),
         photo: idx < 60 ? await upload(`photo-${idx}.png`, png(int(0, 359)), "image/png") : null,
       },
@@ -737,6 +760,7 @@ async function main() {
         customer: company.id, contact: companyContacts.length ? pick(companyContacts).id : null, product: pick(products).id,
         priority: weighted([[1, 1], [2, 3], [3, 5], [4, 2]]), status: resolved ? "Resolved" : pick(["Open", "Waiting on customer", "In progress"]),
         channel: pick(["Email", "Phone", "WhatsApp", "Web form"]), opened_on: opened, resolved, details: "Customer reported the issue; see attached thread.",
+        assigned_to: chance(0.9) ? userIds[pick(["ayesha", "vivek"])] : null,
       },
     });
   }
