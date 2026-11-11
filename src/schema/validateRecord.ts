@@ -74,6 +74,13 @@ function coerce(column: Column, value: unknown): unknown {
       if (typeof value !== "string") throw `must be a ${what} id`;
       return value;
     }
+    case "autonumber": {
+      // normally given by the server; a value can come from an import
+      if (typeof value === "number") value = String(value);
+      if (typeof value !== "string") throw "must be text";
+      if (value.length > 100) throw "is too long";
+      return value.trim() || null;
+    }
     case "choice": {
       // matched to an option's exact label ignoring case/spaces; whether it
       // is an option at all is checked in checkChoices
@@ -113,6 +120,7 @@ export function coerceValues(schema: TableSchema, payload: Record<string, unknow
   const errors: Errors = {};
   for (const column of schema.columns) {
     if (!(column.name in payload)) continue;
+    if (column.type === "formula") continue; // worked out by the server
     try {
       values[column.name] = coerce(column, payload[column.name]);
     } catch (message) {

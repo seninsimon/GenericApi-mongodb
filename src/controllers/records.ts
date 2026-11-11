@@ -20,6 +20,32 @@ import {
 import { parseFilters } from "../schema/filters.js";
 import { columnByNameOrLabel, FILE_COLUMN_TYPES, isSortable, pickDisplayField } from "../schema/columns.js";
 import { getSchema } from "../schema/schemaRepo.js";
+import { assignAutonumbers, autonumberColumns } from "../schema/autonumber.js";
+import { withDefaults } from "../schema/defaults.js";
+import { applyFormulas } from "../schema/formula.js";
+import { refreshParents } from "../schema/rollups.js";
+import { deleteChildren, readBack, saveChildren } from "./lineItems.js";
+
+// ?preview=1 on create/update: do the whole save, read back what the server
+// worked out (formulas, totals, line amounts), then roll it all back. The
+// form shows these values as you type, from the same code as a real save.
+class PreviewDone extends Error {
+  constructor(readonly result: Awaited<ReturnType<typeof readBack>>) {
+    super("preview");
+  }
+}
+const isPreview = (req: Request) => req.query.preview === "1";
+async function previewOrSave<T>(req: Request, res: Response, run: () => Promise<T>): Promise<T | null> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof PreviewDone) {
+      res.json({ preview: true, ...error.result });
+      return null;
+    }
+    throw error;
+  }
+}
 import { checkChoices, checkRelations, checkRequired, coerceValues } from "../schema/validateRecord.js";
 import { deleteUploads } from "../storage.js";
 import type { Action, CurrentUser, RecordData, TableSchema } from "../types.js";
@@ -96,6 +122,18 @@ export async function listHandler(req: Request, res: Response) {
     limit,
     scope: recordScope(user, schema),
   });
+
+  // ?raw=1: stored values (ids, not names), e.g. for editing line items
+  if (req.query.raw === "1") {
+    res.json({
+      data: result.rows.map((row) => ({ ...row.data, _id: row._id, _createdAt: row.createdAt })),
+      total: result.total,
+      totalIsEstimate: result.totalIsEstimate,
+      page,
+      limit,
+    });
+    return;
+  }
 
   // resolve relation ids to display names, only for records the user may see
   const relationLabels = new Map<string, Map<string, string>>();
@@ -251,6 +289,9 @@ export async function bulkDeleteHandler(req: Request, res: Response) {
         client
       );
     }
+    await deleteChildren(schema.tableName, removed.map((r) => r._id), client); // their line items
+    // totals in the records they linked to
+    await refreshParents(schema.tableName, removed.map((r) => r.data), client);
     return removed;
   });
 
@@ -265,15 +306,30 @@ export async function bulkDeleteHandler(req: Request, res: Response) {
 export async function createHandler(req: Request, res: Response) {
   const user = currentUser(req);
   const schema = await loadTable(req, "create");
-  const payload = (req.body ?? {}) as Record<string, unknown>;
+  const payload = withDefaults(schema, (req.body ?? {}) as Record<string, unknown>, user);
+  const preview = isPreview(req);
 
   const { values, errors } = coerceValues(schema, payload);
-  throwIfErrors({ ...errors, ...checkRequired(schema, values), ...checkChoices(schema, values) });
-  const departmentId = resolveDepartment(user, schema, payload._departmentId, true) ?? null;
+  throwIfErrors({ ...errors, ...(preview ? {} : checkRequired(schema, values)), ...checkChoices(schema, values) });
+  const departmentId = preview
+    ? (() => {
+        try {
+          return resolveDepartment(user, schema, payload._departmentId, true) ?? null;
+        } catch {
+          return null; // not chosen yet
+        }
+      })()
+    : (resolveDepartment(user, schema, payload._departmentId, true) ?? null);
   throwIfErrors(await checkRelations(user, schema, values));
 
-  const id = await withTransaction(async (client) => {
+  const id = await previewOrSave(req, res, () => withTransaction(async (client) => {
+    await assignAutonumbers(schema, [values], client);
     const newId = await insertRecord(schema.tableName, values, departmentId, user._id, client);
+    await applyFormulas(schema, [newId], client);
+    // its line items (an invoice's lines), then totals over them
+    await saveChildren(req, user, schema, newId, departmentId, payload._children, client, { preview });
+    if (preview) throw new PreviewDone(await readBack(schema, newId, client));
+    await refreshParents(schema.tableName, [values], client); // totals in the records it links to
     await audit(
       req,
       {
@@ -289,7 +345,8 @@ export async function createHandler(req: Request, res: Response) {
       client
     );
     return newId;
-  });
+  }));
+  if (id === null) return; // a preview: already answered
 
   res.json({ message: "Data inserted successfully", data: { acknowledged: true, insertedId: id } });
 }
@@ -298,21 +355,30 @@ export async function updateHandler(req: Request, res: Response) {
   const user = currentUser(req);
   const schema = await loadTable(req, "edit");
   const id = param(req, "id");
-  const payload = (req.body ?? {}) as Record<string, unknown>;
+  const payload = { ...((req.body ?? {}) as Record<string, unknown>) };
+  // auto-numbers are given once, when the record is created
+  for (const column of autonumberColumns(schema)) delete payload[column.name];
 
   const { values, errors } = coerceValues(schema, payload);
   throwIfErrors(errors);
   const newDepartmentId = resolveDepartment(user, schema, payload._departmentId, false);
+  const preview = isPreview(req);
 
-  const { before, after } = await withTransaction(async (client) => {
+  const saved = await previewOrSave(req, res, () => withTransaction(async (client) => {
     const current = await lockRecord(schema.tableName, id, recordScope(user, schema), client);
     if (!current) throw new HttpError(404, "Record not found");
 
     const merged: RecordData = { ...current.data, ...values };
-    throwIfErrors({ ...checkRequired(schema, merged), ...checkChoices(schema, values, current.data) });
+    throwIfErrors({ ...(preview ? {} : checkRequired(schema, merged)), ...checkChoices(schema, values, current.data) });
     throwIfErrors(await checkRelations(user, schema, values, current.data));
 
     await updateRecord(schema.tableName, id, values, { scope: ALL_RECORDS, newDepartmentId }, client);
+    await applyFormulas(schema, [id], client);
+    const departmentId = newDepartmentId !== undefined ? newDepartmentId : current.departmentId;
+    await saveChildren(req, user, schema, id, departmentId, payload._children, client, { preview });
+    if (preview) throw new PreviewDone(await readBack(schema, id, client));
+    // totals in the records it links to: before (it may have moved) and after
+    await refreshParents(schema.tableName, [current.data, merged], client);
 
     const changes: Record<string, unknown> = diffRecord(current.data, merged);
     if (newDepartmentId !== undefined && newDepartmentId !== current.departmentId) {
@@ -325,7 +391,9 @@ export async function updateHandler(req: Request, res: Response) {
       await audit(req, { action: "update", entity: "record", tableName: schema.tableName, recordId: id, changes }, client);
     }
     return { before: current.data, after: merged };
-  });
+  }));
+  if (saved === null) return; // a preview: already answered
+  const { before, after } = saved;
 
   // delete files that were removed from file/image fields
   const removed: string[] = [];
@@ -347,6 +415,8 @@ export async function deleteHandler(req: Request, res: Response) {
   const deleted = await withTransaction(async (client) => {
     const record = await deleteRecord(schema.tableName, id, recordScope(user, schema), client);
     if (!record) throw new HttpError(404, "Record not found");
+    await deleteChildren(schema.tableName, [id], client); // its line items go with it
+    await refreshParents(schema.tableName, [record.data], client);
     await audit(
       req,
       {

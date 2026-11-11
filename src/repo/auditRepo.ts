@@ -5,7 +5,7 @@ import type { CurrentUser, RecordData } from "../types.js";
 
 // Audit log: who changed what, when.
 
-export type AuditEntity = "record" | "session" | "user" | "role" | "department" | "table" | "column";
+export type AuditEntity = "record" | "session" | "user" | "role" | "department" | "table" | "column" | "app";
 
 export interface AuditEvent {
   action: string;

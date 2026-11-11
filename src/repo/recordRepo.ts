@@ -20,6 +20,13 @@ const scopeCondition = (params: unknown[], scope: RecordScope, alias = "t") => {
       `${alias}.created_by = ${me}`,
       // a JSON string, or an array containing it
       ...scope.owner.userColumns.map((c) => `${alias}.data -> ${quoteLiteral(c)} @> to_jsonb(${me})`),
+      // links to records the user is picked in (worked out once per query)
+      ...(scope.owner.linkColumns ?? []).map(
+        (l) =>
+          `${alias}.data -> ${quoteLiteral(l.column)} ?| ARRAY(SELECT o._id FROM ${dataTable(l.table)} o WHERE ${l.userColumns
+            .map((u) => `o.data -> ${quoteLiteral(u)} @> to_jsonb(${me})`)
+            .join(" OR ")})`
+      ),
     ];
     conditions.push(`(${mine.join(" OR ")})`);
   }
@@ -227,9 +234,11 @@ export async function insertRecord(
   createdBy: string | null,
   db?: Db
 ) {
-  await ensureDataTable(tableName);
+  await ensureDataTable(tableName, db); // in the caller's transaction (the table may be new in it)
   const { rows } = await query<{ _id: string }>(
-    `INSERT INTO ${dataTable(tableName)} (data, department_id, created_by) VALUES ($1::jsonb, $2, $3) RETURNING _id`,
+    // clock_timestamp(): records added together (an invoice's lines) keep their order
+    `INSERT INTO ${dataTable(tableName)} (data, department_id, created_by, created_at, updated_at)
+     VALUES ($1::jsonb, $2, $3, clock_timestamp(), clock_timestamp()) RETURNING _id`,
     [JSON.stringify(data), departmentId, createdBy],
     db
   );
@@ -243,15 +252,17 @@ export async function insertRecords(
   createdBy: string | null,
   db?: Db
 ) {
-  if (!records.length) return 0;
-  await ensureDataTable(tableName);
-  const { rowCount } = await query(
-    `INSERT INTO ${dataTable(tableName)} (data, department_id, created_by)
-     SELECT d, dep, $3 FROM unnest($1::jsonb[], $2::text[]) AS r(d, dep)`,
+  if (!records.length) return [];
+  await ensureDataTable(tableName, db);
+  const { rows } = await query<{ _id: string }>(
+    `INSERT INTO ${dataTable(tableName)} (data, department_id, created_by, created_at, updated_at)
+     SELECT d, dep, $3, clock_timestamp(), clock_timestamp() FROM unnest($1::jsonb[], $2::text[]) WITH ORDINALITY AS r(d, dep, n)
+     ORDER BY n
+     RETURNING _id`,
     [records.map((r) => JSON.stringify(r.data)), records.map((r) => r.departmentId), createdBy],
     db
   );
-  return rowCount ?? 0;
+  return rows.map((r) => r._id);
 }
 
 // Merge `data` into a record (only within `scope`). newDepartmentId:

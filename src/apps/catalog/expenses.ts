@@ -1,0 +1,37 @@
+import { autonum, choice, date, file, longText, managerRole, num, OWN, staffRole, text, user } from "../dsl.js";
+import type { AppBlueprint } from "../types.js";
+
+export const expenses: AppBlueprint = {
+  key: "expenses",
+  version: 1,
+  name: "Expense claims",
+  description: "Staff claim what they spent, with a receipt; managers approve and reimburse. Staff see only their own claims.",
+  icon: "IconReceiptRefund",
+  tables: [
+    {
+      key: "claims",
+      name: "expense_claims",
+      label: "Expense claims",
+      description: "Who spent what, on what, and whether it's paid back",
+      optional: false,
+      columns: [
+        autonum("reference", "Reference", "EXP-"),
+        text("description", "What for", { required: true }),
+        user("claimant", "Claimed by", { default: "$me", required: true }),
+        date("date", "Date", { required: true, default: "today" }),
+        choice("category", "Category", ["Travel", "Meals", "Office supplies", "Software", "Training", "Other"]),
+        num("amount", "Amount", { required: true, indexed: true }),
+        file("receipt", "Receipt"),
+        choice("status", "Status", [["Submitted", "orange"], ["Approved", "blue"], ["Rejected", "red"], ["Reimbursed", "green"]], { default: "Submitted" }),
+        longText("notes", "Notes", { showInTable: false }),
+      ],
+    },
+  ],
+  roles: [managerRole(), staffRole({ claims: OWN({ view: true, create: true, edit: true }) })],
+  sample: (ctx) => ({
+    claims: [
+      { description: "Taxi to client office", claimant: ctx.me, date: ctx.date(-4), category: "Travel", amount: 640, status: "Submitted" },
+      { description: "Team lunch after launch", claimant: ctx.me, date: ctx.date(-12), category: "Meals", amount: 3200, status: "Reimbursed" },
+    ],
+  }),
+};

@@ -8,6 +8,10 @@ import { findByLabels, getRecordsByIds, insertRecords } from "../repo/recordRepo
 import { departmentNames, findActiveUsers, getUserById } from "../repo/userRepo.js";
 import { columnByNameOrLabel, pickDisplayField } from "../schema/columns.js";
 import { getSchema } from "../schema/schemaRepo.js";
+import { assignAutonumbers } from "../schema/autonumber.js";
+import { withDefaults } from "../schema/defaults.js";
+import { applyFormulas } from "../schema/formula.js";
+import { refreshParents } from "../schema/rollups.js";
 import { checkChoices, checkRequired, coerceValues } from "../schema/validateRecord.js";
 import { storage } from "../storage.js";
 import type { Column, CurrentUser, RecordData, TableSchema } from "../types.js";
@@ -179,7 +183,8 @@ export async function runImport(job: Job) {
 
     for (const row of batch) {
       const messages = [...(problems.get(row.line) ?? [])];
-      const { values, errors: fieldErrors } = coerceValues(schema, row.payload);
+      // columns missing from the file get their default
+      const { values, errors: fieldErrors } = coerceValues(schema, withDefaults(schema, row.payload, user));
       messages.push(
         ...Object.values(fieldErrors),
         ...Object.values(checkRequired(schema, values)),
@@ -203,7 +208,14 @@ export async function runImport(job: Job) {
     }
 
     if (valid.length) {
-      inserted += await withTransaction((client) => insertRecords(schema.tableName, valid, user._id, client));
+      inserted += await withTransaction(async (client) => {
+        // numbers for rows without one; numbers in the file are kept
+        await assignAutonumbers(schema, valid.map((v) => v.data), client);
+        const ids = await insertRecords(schema.tableName, valid, user._id, client);
+        await applyFormulas(schema, ids, client);
+        await refreshParents(schema.tableName, valid.map((v) => v.data), client);
+        return ids.length;
+      });
     }
     processed += batch.length;
     batch = [];

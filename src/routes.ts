@@ -6,6 +6,7 @@ import { uploadHandler } from "./controllers/files.js";
 import { departmentOptionsHandler, userOptionsHandler } from "./controllers/people.js";
 import * as jobs from "./controllers/jobs.js";
 import * as records from "./controllers/records.js";
+import * as apps from "./controllers/apps.js";
 import * as schema from "./controllers/schema.js";
 import { handle } from "./lib/http.js";
 import { requireAdmin, requireAuth } from "./middleware/auth.js";
@@ -53,6 +54,14 @@ r.put("/schema/:table/unassigned", adminOnly, handle(schema.assignUnassignedHand
 r.post("/schema/:table/column", adminOnly, handle(schema.addColumnHandler));
 r.put("/schema/:table/column/:name", adminOnly, handle(schema.updateColumnHandler));
 r.delete("/schema/:table/column/:column", adminOnly, handle(schema.deleteColumnHandler));
+r.post("/schema/:table/formula/check", adminOnly, handle(schema.checkFormulaHandler));
+
+// apps (Projects, HR, ...): catalog, preview, install, remove
+r.get("/apps", adminOnly, handle(apps.listAppsHandler));
+r.post("/apps/plan", adminOnly, handle(apps.planHandler));
+r.post("/apps/install", adminOnly, handle(apps.installHandler));
+r.delete("/apps/:key", adminOnly, handle(apps.uninstallHandler));
+r.delete("/apps/:key/sample", adminOnly, handle(apps.removeSampleHandler));
 
 // ---- records ----
 r.get("/table/:collection", requireAuth, handle(records.listHandler));

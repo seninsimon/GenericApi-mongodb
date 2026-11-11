@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { logger } from "../lib/logger.js";
-import { INDEXABLE_TYPES } from "../schema/columns.js";
+import { INDEXABLE_TYPES, valueType } from "../schema/columns.js";
 import type { Column, TableSchema } from "../types.js";
-import { pool, query, quoteIdent, quoteLiteral } from "./pool.js";
+import { pool, query, query as runQuery, quoteIdent, quoteLiteral, type Db } from "./pool.js";
 
 // Each ERP table is a Postgres table in the erp_data schema. Field values are
 // stored as JSONB so columns can change from the UI without migrations;
@@ -16,11 +16,14 @@ const hash = (value: string, length = 16) =>
 
 const ensured = new Set<string>();
 
-export async function ensureDataTable(tableName: string): Promise<void> {
+// `db`: run inside the caller's transaction (then not remembered as created
+// until the caller calls this again after committing).
+export async function ensureDataTable(tableName: string, db?: Db): Promise<void> {
   if (ensured.has(tableName)) return;
 
   const table = dataTable(tableName);
   const prefix = hash(tableName);
+  const query = (sql: string) => runQuery(sql, [], db);
 
   await query(`
     CREATE TABLE IF NOT EXISTS ${table} (
@@ -55,7 +58,7 @@ export async function ensureDataTable(tableName: string): Promise<void> {
      ON ${table} USING gin (erp_search_text(data) gin_trgm_ops)`
   );
 
-  ensured.add(tableName);
+  if (!db) ensured.add(tableName);
 }
 
 // After a table is dropped, so a new table with the same name is set up again.
@@ -73,22 +76,32 @@ export const sortExpression = (column: Column, alias = "t"): string => {
     const labels = (column.options ?? []).map((o) => quoteLiteral(o.label)).join(", ");
     return labels ? `array_position(ARRAY[${labels}]::text[], ${field})` : `(${field})`;
   }
-  return column.type === "number" ? `erp_try_numeric(${field})` : `(${field})`;
+  return valueType(column) === "number" ? `erp_try_numeric(${field})` : `(${field})`;
 };
 
 const indexNameFor = (tableName: string, column: Column) =>
-  `${hash(tableName)}_col_${hash(column.name, 12)}_${column.type === "number" ? "n" : "t"}`;
+  `${hash(tableName)}_col_${hash(column.name, 12)}_${valueType(column) === "number" ? "n" : "t"}`;
+const linkIndexNameFor = (tableName: string, column: Column) => `${hash(tableName)}_col_${hash(column.name, 12)}_l`;
 
-// Create/drop sort indexes so they match the columns marked "indexed".
+// Columns that hold ids of linked records or people. They always get an
+// index (GIN on the JSON value, single id or list), used by link filters,
+// "related records" and "Own only": `data -> col ?| ids` / `@> id`.
+const LINK_TYPES = ["relation", "user"];
+
+// Create/drop indexes so they match the columns: sort indexes for columns
+// marked "indexed", link indexes for link and person columns.
 // Uses CONCURRENTLY so big tables stay writable while an index builds.
 export async function syncColumnIndexes(schema: TableSchema): Promise<void> {
   const table = dataTable(schema.tableName);
   const prefix = `${hash(schema.tableName)}_col_`;
 
-  const wanted = new Map<string, Column>();
+  const wanted = new Map<string, string>(); // index name -> indexed expression
   for (const column of schema.columns) {
     if (column.indexed && INDEXABLE_TYPES.includes(column.type)) {
-      wanted.set(indexNameFor(schema.tableName, column), column);
+      wanted.set(indexNameFor(schema.tableName, column), `(${sortExpression(column, "")})`);
+    }
+    if (LINK_TYPES.includes(column.type)) {
+      wanted.set(linkIndexNameFor(schema.tableName, column), `USING gin ((data -> ${quoteLiteral(column.name)}))`);
     }
   }
 
@@ -109,11 +122,9 @@ export async function syncColumnIndexes(schema: TableSchema): Promise<void> {
   }
 
   const present = new Set(existing.filter((e) => e.valid).map((e) => e.indexname));
-  for (const [name, column] of wanted) {
+  for (const [name, expression] of wanted) {
     if (present.has(name)) continue;
-    await pool.query(
-      `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${quoteIdent(name)} ON ${table} (${sortExpression(column, "")})`
-    );
-    logger.info({ table: schema.tableName, column: column.name }, "created sort index");
+    await pool.query(`CREATE INDEX CONCURRENTLY IF NOT EXISTS ${quoteIdent(name)} ON ${table} ${expression}`);
+    logger.info({ table: schema.tableName, index: name }, "created index");
   }
 }

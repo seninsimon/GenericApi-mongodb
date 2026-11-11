@@ -16,9 +16,11 @@ import { normalizePermissions } from "../auth/access.js";
 import { env } from "../config/env.js";
 import { dataTable, ensureDataTable, syncColumnIndexes } from "../db/dataTables.js";
 import { migrate } from "../db/migrate.js";
-import { pool, query } from "../db/pool.js";
+import { pool, query, withTransaction } from "../db/pool.js";
 import { ensureInitialAdmin } from "../auth/bootstrap.js";
 import { createDepartment, createRole, createUser, findUserForLogin } from "../repo/userRepo.js";
+import { backfillAutonumber, syncCounterFromData } from "../schema/autonumber.js";
+import { applyFormulas } from "../schema/formula.js";
 import { createTable, getSchema, invalidateSchemas, updateTableSettings } from "../schema/schemaRepo.js";
 import { storage, UPLOAD_URL_PREFIX } from "../storage.js";
 
@@ -180,6 +182,16 @@ const date = (name: string, label: string, extra: Partial<Col> = {}): Col => ({ 
 const bool = (name: string, label: string, extra: Partial<Col> = {}): Col => ({ name, label, type: "boolean", ...extra });
 const link = (name: string, label: string, ref: string, extra: Partial<Col> = {}): Col => ({ name, label, type: "relation", ref, ...extra });
 const hidden = { showInTable: false };
+// INV-0001, INV-0002, ... given automatically to new records
+const autonum = (name: string, label: string, prefix: string, extra: Partial<Col> = {}): Col => ({
+  name, label, type: "autonumber", autonumber: { prefix }, indexed: true, ...extra,
+});
+// worked out from other fields when a record is saved
+const formula = (name: string, label: string, expression: string, extra: Partial<Col> = {}): Col => ({
+  name, label, type: "formula", formula: { expression }, ...extra,
+});
+// the value an auto-number column gives record n
+const numbered = (prefix: string, n: number) => `${prefix}${String(n).padStart(4, "0")}`;
 // a fixed list of options; [label, colour] pairs or plain labels (colours are then picked automatically)
 const choice = (name: string, label: string, options: (string | [string, string])[], extra: Partial<Col> = {}): Col => ({
   name, label, type: "choice", options: options.map((o) => (typeof o === "string" ? { label: o } : { label: o[0], color: o[1] })), ...extra,
@@ -209,7 +221,7 @@ const TABLES: { name: string; departments: string[]; columns: Col[] }[] = [
   ] },
   { name: "deals", departments: ["Sales"], columns: [
     text("title", "Deal", { required: true, indexed: true }), link("company", "Company", "companies", { required: true }), link("contact", "Contact", "contacts"),
-    choice("stage", "Stage", [["Prospect", "gray"], ["Qualified", "blue"], ["Proposal", "violet"], ["Negotiation", "orange"], ["Won", "green"], ["Lost", "red"]]), num("value", "Value", { indexed: true }), num("probability", "Probability %", { indexed: true }),
+    choice("stage", "Stage", [["Prospect", "gray"], ["Qualified", "blue"], ["Proposal", "violet"], ["Negotiation", "orange"], ["Won", "green"], ["Lost", "red"]], { default: "Prospect" }), num("value", "Value", { indexed: true }), num("probability", "Probability %", { indexed: true }),
     date("expected_close", "Expected close"), link("owner", "Owner", "employees"), { name: "notes", label: "Notes", type: "richtext", ...hidden },
   ] },
   { name: "products", departments: ["All staff"], columns: [
@@ -218,9 +230,9 @@ const TABLES: { name: string; departments: string[]; columns: Col[] }[] = [
     bool("active", "Active"), { name: "photos", label: "Photos", type: "images" }, { name: "description", label: "Description", type: "richtext", ...hidden },
   ] },
   { name: "orders", departments: ["Sales", "Operations", "Finance"], columns: [
-    text("number", "Order #", { required: true, indexed: true }), link("customer", "Customer", "companies", { required: true }),
-    link("items", "Items", "products", { multiple: true }), date("order_date", "Order date", { required: true }), num("total", "Total", { indexed: true }),
-    choice("status", "Status", [["Draft", "gray"], ["Confirmed", "blue"], ["Shipped", "violet"], ["Delivered", "green"], ["Cancelled", "red"]]), bool("paid", "Paid"), { name: "invoice", label: "Invoice", type: "file", ...hidden },
+    autonum("number", "Order #", "SO-"), link("customer", "Customer", "companies", { required: true }),
+    link("items", "Items", "products", { multiple: true }), date("order_date", "Order date", { required: true, default: "today" }), num("total", "Total", { indexed: true }),
+    choice("status", "Status", [["Draft", "gray"], ["Confirmed", "blue"], ["Shipped", "violet"], ["Delivered", "green"], ["Cancelled", "red"]], { default: "Draft" }), bool("paid", "Paid"), { name: "invoice", label: "Invoice", type: "file", ...hidden },
     { name: "notes", label: "Notes", type: "textarea", ...hidden },
   ] },
   { name: "suppliers", departments: ["All staff"], columns: [
@@ -228,62 +240,62 @@ const TABLES: { name: string; departments: string[]; columns: Col[] }[] = [
     text("email", "Email"), text("phone", "Phone"), text("city", "City", { indexed: true }), num("rating", "Rating (1–5)", { indexed: true }), bool("preferred", "Preferred"),
   ] },
   { name: "purchase_orders", departments: ["Operations", "Finance"], columns: [
-    text("po_number", "PO #", { required: true, indexed: true }), link("supplier", "Supplier", "suppliers", { required: true }),
-    link("items", "Items", "products", { multiple: true }), date("ordered_on", "Ordered on"), date("expected_on", "Expected on"),
+    autonum("po_number", "PO #", "PO-"), link("supplier", "Supplier", "suppliers", { required: true }),
+    link("items", "Items", "products", { multiple: true }), date("ordered_on", "Ordered on", { default: "today" }), date("expected_on", "Expected on"),
     num("amount", "Amount", { indexed: true }),
-    choice("status", "Status", [["Draft", "gray"], ["Sent", "blue"], ["Partially received", "orange"], ["Received", "green"], ["Cancelled", "red"]]), bool("received", "Received"),
+    choice("status", "Status", [["Draft", "gray"], ["Sent", "blue"], ["Partially received", "orange"], ["Received", "green"], ["Cancelled", "red"]], { default: "Draft" }), bool("received", "Received"),
   ] },
   { name: "payroll", departments: ["HR"], columns: [
     text("reference", "Reference", { required: true, indexed: true }), link("employee", "Employee", "employees", { required: true }),
     date("month", "Month"), num("basic", "Basic"), num("allowances", "Allowances"), num("deductions", "Deductions"),
-    num("net_pay", "Net pay", { indexed: true }), bool("paid", "Paid"),
+    formula("net_pay", "Net pay", "{basic} + {allowances} - {deductions}", { indexed: true }), bool("paid", "Paid"),
   ] },
   { name: "leave_requests", departments: ["HR"], columns: [
-    text("reference", "Reference", { required: true, indexed: true }), link("employee", "Employee", "employees", { required: true }),
+    autonum("reference", "Reference", "LV-"), link("employee", "Employee", "employees", { required: true }),
     choice("leave_type", "Type", ["Casual", "Sick", "Earned", "Work from home", "Unpaid"]), date("from_date", "From", { required: true }), date("to_date", "To", { required: true }),
-    num("days", "Days"), choice("status", "Status", [["Pending", "orange"], ["Approved", "green"], ["Rejected", "red"]]), { name: "reason", label: "Reason", type: "textarea", ...hidden },
+    formula("days", "Days", "DAYS({to_date}, {from_date}) + 1"), choice("status", "Status", [["Pending", "orange"], ["Approved", "green"], ["Rejected", "red"]], { default: "Pending" }), { name: "reason", label: "Reason", type: "textarea", ...hidden },
   ] },
   { name: "projects", departments: ["IT", "Marketing", "Operations"], columns: [
     text("name", "Project", { required: true, indexed: true }), text("code", "Code", { indexed: true }), link("owner", "Owner", "employees"),
     date("start_date", "Start"), date("due_date", "Due"), num("budget", "Budget", { indexed: true }), num("progress", "Progress %", { indexed: true }),
-    choice("status", "Status", [["Planning", "gray"], ["Active", "blue"], ["On hold", "orange"], ["Completed", "green"]]),
+    choice("status", "Status", [["Planning", "gray"], ["Active", "blue"], ["On hold", "orange"], ["Completed", "green"]], { default: "Planning" }),
     { name: "description", label: "Description", type: "richtext", ...hidden },
   ] },
   { name: "tasks", departments: ["IT", "Marketing", "Operations"], columns: [
-    text("title", "Task", { required: true, indexed: true }), choice("status", "Status", TASK_STATUSES, { required: true }),
-    choice("priority", "Priority", PRIORITIES), link("assignee", "Assignee", "employees"), link("project", "Project", "projects"),
+    text("title", "Task", { required: true, indexed: true }), choice("status", "Status", TASK_STATUSES, { required: true, default: "To do" }),
+    choice("priority", "Priority", PRIORITIES, { default: "Normal" }), link("assignee", "Assignee", "employees"), link("project", "Project", "projects"),
     date("start_date", "Start"), date("due_date", "Due"), num("progress", "Progress %", { indexed: true }), num("estimated_hours", "Estimated h"),
     num("hours_spent", "Hours spent"), date("completed_on", "Completed on", hidden), link("parent_task", "Parent task", "tasks", hidden),
     { name: "description", label: "Description", type: "richtext", ...hidden },
   ] },
   { name: "time_logs", departments: ["IT", "Marketing", "Operations"], columns: [
     text("work_done", "Work done", { required: true, indexed: true }), link("task", "Task", "tasks", { required: true }),
-    link("person", "Person", "employees", { required: true }), date("date", "Date", { required: true }), num("hours", "Hours", { required: true }),
+    link("person", "Person", "employees", { required: true }), date("date", "Date", { required: true, default: "today" }), num("hours", "Hours", { required: true }),
   ] },
   { name: "assets", departments: ["IT"], columns: [
-    text("tag", "Asset tag", { required: true, indexed: true }), text("name", "Asset", { indexed: true }), choice("category", "Category", ASSET_CATEGORIES),
+    autonum("tag", "Asset tag", "AST-"), text("name", "Asset", { indexed: true }), choice("category", "Category", ASSET_CATEGORIES),
     link("assigned_to", "Assigned to", "employees"), date("purchased_on", "Purchased"), date("warranty_until", "Warranty until"),
     num("value", "Value", { indexed: true }), choice("condition", "Condition", [["Good", "green"], ["Fair", "yellow"], ["Needs repair", "orange"], ["Retired", "gray"]]), text("serial_number", "Serial number", hidden),
   ] },
   { name: "it_tickets", departments: ["IT"], columns: [
-    text("subject", "Subject", { required: true, indexed: true }), link("requester", "Requester", "employees"), link("assignee", "Assignee", "employees"),
-    choice("category", "Category", ["Hardware", "Network", "Access", "Software", "Email"]), choice("priority", "Priority", PRIORITIES),
-    choice("status", "Status", [["Open", "orange"], ["In progress", "blue"], ["Resolved", "green"], ["Closed", "gray"]]),
-    date("opened_on", "Opened"), date("resolved_on", "Resolved", hidden), link("asset", "Asset", "assets", hidden),
+    text("subject", "Subject", { required: true, indexed: true }), autonum("number", "Ticket #", "IT-"), link("requester", "Requester", "employees"), link("assignee", "Assignee", "employees"),
+    choice("category", "Category", ["Hardware", "Network", "Access", "Software", "Email"]), choice("priority", "Priority", PRIORITIES, { default: "Normal" }),
+    choice("status", "Status", [["Open", "orange"], ["In progress", "blue"], ["Resolved", "green"], ["Closed", "gray"]], { default: "Open" }),
+    date("opened_on", "Opened", { default: "today" }), date("resolved_on", "Resolved", hidden), link("asset", "Asset", "assets", hidden),
     { name: "details", label: "Details", type: "textarea", ...hidden },
   ] },
   { name: "expenses", departments: ["Sales", "Marketing", "Operations", "IT", "Finance"], columns: [
     text("description", "Expense", { required: true, indexed: true }), choice("category", "Category", EXPENSE_CATEGORIES),
-    num("amount", "Amount", { required: true, indexed: true }), date("spent_on", "Spent on", { required: true }), link("submitted_by", "Submitted by", "employees"),
+    num("amount", "Amount", { required: true, indexed: true }), date("spent_on", "Spent on", { required: true, default: "today" }), link("submitted_by", "Submitted by", "employees"),
     bool("reimbursed", "Reimbursed"), { name: "receipt", label: "Receipt", type: "image", ...hidden },
   ] },
   { name: "support_tickets", departments: ["Support", "Sales"], columns: [
-    text("subject", "Subject", { required: true, indexed: true }), link("customer", "Customer", "companies"), link("contact", "Contact", "contacts"),
-    link("product", "Product", "products"), choice("priority", "Priority", PRIORITIES),
-    choice("status", "Status", [["Open", "orange"], ["In progress", "blue"], ["Waiting on customer", "yellow"], ["Resolved", "green"]]),
-    choice("channel", "Channel", ["Email", "Phone", "WhatsApp", "Web form"]), date("opened_on", "Opened"), bool("resolved", "Resolved"),
+    text("subject", "Subject", { required: true, indexed: true }), autonum("number", "Ticket #", "TCK-"), link("customer", "Customer", "companies"), link("contact", "Contact", "contacts"),
+    link("product", "Product", "products"), choice("priority", "Priority", PRIORITIES, { default: "Normal" }),
+    choice("status", "Status", [["Open", "orange"], ["In progress", "blue"], ["Waiting on customer", "yellow"], ["Resolved", "green"]], { default: "Open" }),
+    choice("channel", "Channel", ["Email", "Phone", "WhatsApp", "Web form"]), date("opened_on", "Opened", { default: "today" }), bool("resolved", "Resolved"),
     // a "User" column: picks from the login accounts (filter "Assigned to: Me" = my queue)
-    { name: "assigned_to", label: "Assigned to", type: "user" },
+    { name: "assigned_to", label: "Assigned to", type: "user", default: "$me" },
     { name: "details", label: "Details", type: "textarea", ...hidden },
   ] },
 ];
@@ -551,7 +563,7 @@ async function main() {
     const orderDate = dateBetween(-540, 0);
     const items = sample(products, int(1, 4));
     const status = weighted(ORDER_STATUSES);
-    const number = `SO-${String(24000 + i).padStart(6, "0")}`;
+    const number = numbered("SO-", 24000 + i);
     orderRows.push({
       id: randomUUID(), dept: dept[weighted([["Sales", 8], ["Operations", 2], ["Finance", 1]])], createdAt: createdAround(orderDate),
       data: {
@@ -589,7 +601,7 @@ async function main() {
     poRows.push({
       id: randomUUID(), dept: dept[chance(0.8) ? "Operations" : "Finance"], createdAt: createdAround(ordered),
       data: {
-        po_number: `PO-${String(5000 + i).padStart(5, "0")}`, supplier: pick(suppliers), items: sample(products, int(1, 3)).map((p) => p.id),
+        po_number: numbered("PO-", 5000 + i), supplier: pick(suppliers), items: sample(products, int(1, 3)).map((p) => p.id),
         ordered_on: ordered, expected_on: plusDays(ordered, int(5, 45)), amount: money(5_000, 800_000), status, received: status === "Received",
       },
     });
@@ -622,7 +634,7 @@ async function main() {
     leaveRows.push({
       id: randomUUID(), dept: dept.HR, createdAt: createdAround(plusDays(from, -int(2, 20))),
       data: {
-        reference: `LV-${String(1000 + i).padStart(5, "0")}`, employee: pick(employees).id,
+        reference: numbered("LV-", 1000 + i), employee: pick(employees).id,
         leave_type: weighted<string>([["Casual", 4], ["Sick", 3], ["Earned", 2], ["Work from home", 2], ["Unpaid", 0.5]]),
         from_date: from, to_date: plusDays(from, days - 1), days, status: from > iso(TODAY) ? weighted<string>([["Pending", 3], ["Approved", 2]]) : weighted<string>([["Approved", 8], ["Rejected", 1]]),
         reason: chance(0.5) ? pick(["Family function", "Medical appointment", "Travel", "Personal work", "Festival"]) : "",
@@ -708,7 +720,7 @@ async function main() {
     assetRows.push({
       id, dept: dept.IT, createdAt: createdAround(purchased),
       data: {
-        tag: `AST-${String(1000 + i).padStart(5, "0")}`, name: `${type} ${pick(["Dell", "HP", "Lenovo", "Apple", "Cisco", "Epson", "Samsung"])}`, category,
+        tag: numbered("AST-", 1000 + i), name: `${type} ${pick(["Dell", "HP", "Lenovo", "Apple", "Cisco", "Epson", "Samsung"])}`, category,
         assigned_to: chance(0.85) ? pick(employees).id : null, purchased_on: purchased, warranty_until: plusDays(purchased, pick([365, 730, 1095])),
         value: Math.round(value * (0.8 + rand() * 0.4)), condition: weighted<string>([["Good", 6], ["Fair", 2], ["Needs repair", 1], ["Retired", 0.5]]),
         serial_number: `SN${int(10000000, 99999999)}`,
@@ -783,8 +795,19 @@ async function main() {
   await invalidateSchemas();
   for (const t of TABLES) {
     await ensureDataTable(t.name);
-    await syncColumnIndexes((await getSchema(t.name))!);
+    const schema = (await getSchema(t.name))!;
+    await syncColumnIndexes(schema);
     await query(`ANALYZE ${dataTable(t.name)}`);
+    // auto-numbers: number the rows that came without one (oldest first);
+    // otherwise new records continue after the demo's numbers
+    for (const column of schema.columns.filter((c) => c.type === "autonumber")) {
+      const { rowCount } = await query(`SELECT 1 FROM ${dataTable(t.name)} WHERE data ? $1 LIMIT 1`, [column.name]);
+      await withTransaction((client) =>
+        rowCount ? syncCounterFromData(t.name, column, client) : backfillAutonumber(t.name, column, client)
+      );
+    }
+    // formulas from the stored fields (the generated rows may differ slightly)
+    await withTransaction((client) => applyFormulas(schema, null, client));
   }
   for (const t of TABLES) {
     await query(

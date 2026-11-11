@@ -1,3 +1,4 @@
+import { peekSchema } from "../schema/schemaRepo.js";
 import type { Action, CurrentUser, DepartmentRef, PermissionMap, Permissions, RecordScope, TableSchema } from "../types.js";
 
 // Access rules for ERP tables and records.
@@ -35,9 +36,20 @@ export const recordScope = (user: CurrentUser, schema: TableSchema): RecordScope
   if (isAdmin(user)) return ALL_RECORDS;
   if (tablePermissions(user, schema).own) {
     // ownership replaces the department rule (table access still needs a shared department)
+    // one link deep, and only through User columns ("created by" doesn't
+    // carry over: an HR clerk who created everyone's employee record doesn't
+    // thereby own everyone's leave)
+    const linkColumns = schema.columns
+      .filter((c) => c.type === "relation" && c.ref)
+      .map((c) => ({
+        column: c.name,
+        table: c.ref!,
+        userColumns: (peekSchema(c.ref!)?.columns ?? []).filter((u) => u.type === "user").map((u) => u.name),
+      }))
+      .filter((l) => l.userColumns.length > 0);
     return {
       departmentIds: null,
-      owner: { userId: user._id, userColumns: schema.columns.filter((c) => c.type === "user").map((c) => c.name) },
+      owner: { userId: user._id, userColumns: schema.columns.filter((c) => c.type === "user").map((c) => c.name), linkColumns },
     };
   }
   return { departmentIds: allowedDepartments(user, schema).map((d) => d._id), owner: null };

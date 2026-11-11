@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { APP_BY_KEY } from "../apps/index.js";
 import { allowedDepartments, can, isAdmin, tablePermissions } from "../auth/access.js";
 import { HttpError, param, toIdList } from "../lib/http.js";
 import { currentUser } from "../middleware/auth.js";
@@ -17,12 +18,16 @@ import {
   updateColumn,
   updateTableSettings,
 } from "../schema/schemaRepo.js";
+import { tryFormula } from "../schema/formula.js";
+import { assertNotUsedByRollups } from "../schema/rollups.js";
 import { deleteUploads } from "../storage.js";
 import type { CurrentUser, TableSchema } from "../types.js";
 
-// What the current user may do with a table, added to the schema.
+// What the current user may do with a table, added to the schema, and the
+// sidebar group of tables an app made ("Company", "Projects"; null = your own).
 const withAccess = (user: CurrentUser, schema: TableSchema) => ({
   ...schema,
+  group: schema.appKey ? (APP_BY_KEY.get(schema.appKey)?.group ?? APP_BY_KEY.get(schema.appKey)?.name ?? null) : null,
   permissions: tablePermissions(user, schema),
   allowedDepartments: allowedDepartments(user, schema),
 });
@@ -61,6 +66,8 @@ export async function createTableHandler(req: Request, res: Response) {
 export async function deleteTableHandler(req: Request, res: Response) {
   const schema = await requireTable(param(req, "table"));
 
+  // totals elsewhere can't lose the records they add up
+  await assertNotUsedByRollups(schema.tableName);
   // don't leave relation columns in other tables pointing at nothing
   const references = await findRelationsTo(schema.tableName);
   if (references.length) {
@@ -142,8 +149,8 @@ export async function updateColumnHandler(req: Request, res: Response) {
   const tableName = param(req, "table");
   const { before, after, rewritten } = await updateColumn(tableName, param(req, "name"), req.body ?? {});
   const changes: Record<string, unknown> = Object.fromEntries(
-    (["label", "type", "showInTable", "required", "indexed"] as const)
-      .filter((k) => before[k] !== after[k])
+    (["label", "type", "showInTable", "required", "indexed", "default"] as const)
+      .filter((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]))
       .map((k) => [k, { from: before[k], to: after[k] }])
   );
   const labels = (c: typeof before) => (c.options ?? []).map((o) => o.label);
@@ -161,4 +168,13 @@ export async function deleteColumnHandler(req: Request, res: Response) {
   const { removed } = await deleteColumn(tableName, param(req, "column"));
   await audit(req, { action: "delete", entity: "column", tableName, recordId: removed.name, changes: { type: removed.type } });
   res.json({ message: "Column removed" });
+}
+
+// POST /schema/:table/formula/check { expression, column? }: is the formula
+// valid, what kind of value does it give, and what is it on the latest record?
+export async function checkFormulaHandler(req: Request, res: Response) {
+  const schema = await requireTable(param(req, "table"));
+  const { expression, column } = (req.body ?? {}) as { expression?: unknown; column?: unknown };
+  if (typeof expression !== "string" || !expression.trim()) throw new HttpError(400, "Enter a formula");
+  res.json(await tryFormula(schema, expression, typeof column === "string" ? column : undefined));
 }

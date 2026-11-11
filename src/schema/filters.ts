@@ -1,6 +1,7 @@
 import { quoteLiteral } from "../db/pool.js";
 import { HttpError } from "../lib/http.js";
 import type { Column, TableSchema } from "../types.js";
+import { ME, MINE, valueType } from "./columns.js";
 
 // Column filters for record lists and exports.
 //
@@ -51,8 +52,7 @@ type Kind =
   | "department"
   | "createdBy";
 
-export const ME = "$me";
-export const MINE = "$mine";
+export { ME, MINE };
 
 // who is looking at the list (for "$me" / "$mine")
 type Viewer = { _id: string; departments: { _id: string }[] } | null;
@@ -72,7 +72,8 @@ const OPS_BY_KIND: Record<Kind, FilterOp[]> = {
 };
 
 const kindOf = (column: Column): Kind => {
-  switch (column.type) {
+  // a formula filters like its result: number, date, yes/no or text
+  switch (valueType(column)) {
     case "number":
       return "number";
     case "date":
@@ -213,8 +214,9 @@ export function filterConditions(schema: TableSchema, filters: RecordFilter[], p
       case "user":
       case "departmentColumn":
       case "choice": {
-        const ids = p(f.value);
-        const match = `((jsonb_typeof(${json}) = 'array' AND ${json} ?| ${ids}::text[]) OR ${text} = ANY(${ids}::text[]))`;
+        // `?|` matches a single id/label or one inside a list (and uses the
+        // link columns' GIN index)
+        const match = `${json} ?| ${p(f.value)}::text[]`;
         // "is not": also records with no value
         return f.op === "notIn" ? `NOT COALESCE(${match}, FALSE)` : match;
       }

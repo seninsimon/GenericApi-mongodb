@@ -6,7 +6,10 @@ import { HttpError } from "../lib/http.js";
 import { logger } from "../lib/logger.js";
 import { removeTableFromRoles } from "../repo/userRepo.js";
 import type { Column, TableSchema } from "../types.js";
+import { backfillAutonumber, deleteCounters } from "./autonumber.js";
 import { distinctTextValues, rewriteChoiceValues } from "./choiceValues.js";
+import { applyFormulas, checkFormulas, formulaRefs } from "./formula.js";
+import { assertNotUsedByRollups, checkRollups, refreshAllParents } from "./rollups.js";
 import { applyColumnUpdate, normalizeColumn, validateTableName } from "./columns.js";
 
 /* ============================ cache ============================ */
@@ -26,6 +29,8 @@ type SchemaRow = {
   table_name: string;
   columns: (Partial<Column> & Record<string, unknown>)[];
   show_in_menu: boolean;
+  blueprint_key: string | null;
+  app_key: string | null;
   departments: { _id: string; name: string }[];
   created_at: Date;
   updated_at: Date;
@@ -38,6 +43,8 @@ const toSchema = (row: SchemaRow): TableSchema => ({
   columns: row.columns.map((c) => normalizeColumn(c, { strict: false })),
   showInMenu: row.show_in_menu,
   departments: row.departments ?? [],
+  blueprintKey: row.blueprint_key ?? null,
+  appKey: row.app_key ?? null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -71,6 +78,9 @@ async function schemas(): Promise<Map<string, TableSchema>> {
 }
 
 export const getAllSchemas = async (): Promise<TableSchema[]> => [...(await schemas()).values()];
+// The cached schema, without waiting (null before the first load). For code
+// that can't be async, e.g. building a record scope; a slightly stale copy is fine.
+export const peekSchema = (tableName: string): TableSchema | null => cache?.get(tableName) ?? null;
 export const getSchema = async (tableName: string): Promise<TableSchema | null> =>
   (await schemas()).get(tableName) ?? null;
 
@@ -118,6 +128,8 @@ export async function startSchemaListener(): Promise<() => Promise<void>> {
 export async function createTable(input: { tableName: unknown; columns?: unknown[]; showInMenu?: boolean }) {
   const tableName = validateTableName(input.tableName);
   const columns = (input.columns ?? []).map((c) => normalizeColumn(c as Record<string, unknown>));
+  await checkRollups(tableName, columns);
+  checkFormulas(columns);
   if (await getSchema(tableName)) throw new HttpError(409, "Table already exists");
 
   await ensureDataTable(tableName);
@@ -152,12 +164,20 @@ async function changeColumns(
     );
     if (!rows[0]) throw new HttpError(404, "Table not found");
     const current = rows[0].columns.map((c) => normalizeColumn(c, { strict: false }));
+    const next = change(current);
+    // every roll-up and formula still works with the new columns (and gets its result type)
+    await checkRollups(tableName, next);
+    checkFormulas(next);
     await query(
       `UPDATE table_schemas SET columns = $2::jsonb, updated_at = now() WHERE table_name = $1`,
-      [tableName, JSON.stringify(change(current))],
+      [tableName, JSON.stringify(next)],
       client
     );
     await afterWrite?.(client);
+    // a column change can change formula results: work them out again, and
+    // totals elsewhere over this table
+    await applyFormulas({ tableName, columns: next } as TableSchema, null, client);
+    await refreshAllParents(tableName, client);
   });
   await invalidateSchemas();
   const schema = (await getSchema(tableName))!;
@@ -171,13 +191,18 @@ export async function addColumn(tableName: string, input: Record<string, unknown
     throw new HttpError(400, `Linked table "${column.ref}" doesn't exist`);
   }
   let added: Column = column;
-  const schema = await changeColumns(tableName, (columns) => {
-    if (columns.some((c) => c.name === column.name)) {
-      throw new HttpError(409, `A column named "${column.name}" already exists`);
-    }
-    added = column;
-    return [...columns, column];
-  });
+  const schema = await changeColumns(
+    tableName,
+    (columns) => {
+      if (columns.some((c) => c.name === column.name)) {
+        throw new HttpError(409, `A column named "${column.name}" already exists`);
+      }
+      added = column;
+      return [...columns, column];
+    },
+    // existing records get numbers in the order they were created
+    column.type === "autonumber" ? (client) => backfillAutonumber(tableName, column, client) : undefined
+  );
   return { schema, column: added };
 }
 
@@ -221,12 +246,24 @@ export async function updateColumn(tableName: string, columnName: string, payloa
 }
 
 export async function deleteColumn(tableName: string, columnName: string) {
+  await assertNotUsedByRollups(tableName, columnName);
   let removed: Column | undefined;
-  const schema = await changeColumns(tableName, (columns) => {
-    removed = columns.find((c) => c.name === columnName);
-    if (!removed) throw new HttpError(404, "Column not found");
-    return columns.filter((c) => c.name !== columnName);
-  });
+  const schema = await changeColumns(
+    tableName,
+    (columns) => {
+      removed = columns.find((c) => c.name === columnName);
+      if (!removed) throw new HttpError(404, "Column not found");
+      const usedBy = columns.filter((c) => c.type === "formula" && c.name !== columnName && formulaRefs(c).includes(columnName));
+      if (usedBy.length) {
+        throw new HttpError(
+          400,
+          `"${removed.label || removed.name}" is used by the formula ${usedBy.map((c) => `"${c.label || c.name}"`).join(", ")}. Change or delete that formula first.`
+        );
+      }
+      return columns.filter((c) => c.name !== columnName);
+    },
+    (client) => deleteCounters(tableName, columnName, client)
+  );
   return { schema, removed: removed! };
 }
 
