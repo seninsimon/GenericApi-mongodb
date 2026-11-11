@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { can, departmentFilter, isAdmin } from "../auth/access.js";
+import { can, recordScope, isAdmin } from "../auth/access.js";
 import { HttpError, intParam } from "../lib/http.js";
 import { currentUser } from "../middleware/auth.js";
 import { listAudit } from "../repo/auditRepo.js";
@@ -32,7 +32,7 @@ export async function listAuditHandler(req: Request, res: Response) {
     if (!filter.tableName || !filter.recordId) throw new HttpError(403, "Only admins can browse the audit log");
     const schema = await getSchema(filter.tableName);
     if (!schema || !can(user, schema, "view")) throw new HttpError(404, "Table not found");
-    if (!(await getRecord(schema.tableName, filter.recordId, departmentFilter(user, schema)))) {
+    if (!(await getRecord(schema.tableName, filter.recordId, recordScope(user, schema)))) {
       throw new HttpError(404, "Record not found");
     }
     // record history only: no browsing by user or other entities

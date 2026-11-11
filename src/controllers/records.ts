@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { allowedDepartments, can, departmentFilter, isAdmin } from "../auth/access.js";
+import { ALL_RECORDS, allowedDepartments, can, isAdmin, recordScope } from "../auth/access.js";
 import { withTransaction } from "../db/pool.js";
 import { HttpError, intParam, param, toIdList } from "../lib/http.js";
 import { currentUser } from "../middleware/auth.js";
@@ -94,7 +94,7 @@ export async function listHandler(req: Request, res: Response) {
     order: req.query.order === "asc" ? "asc" : "desc",
     page,
     limit,
-    departmentIds: departmentFilter(user, schema),
+    scope: recordScope(user, schema),
   });
 
   // resolve relation ids to display names, only for records the user may see
@@ -107,7 +107,7 @@ export async function listHandler(req: Request, res: Response) {
     if (!refSchema || !can(user, refSchema, "view")) continue;
 
     const display = pickDisplayField(refSchema, column.displayField);
-    const found = await getRecordsByIds(refSchema.tableName, [...ids], departmentFilter(user, refSchema));
+    const found = await getRecordsByIds(refSchema.tableName, [...ids], recordScope(user, refSchema));
     relationLabels.set(
       column.name,
       new Map(found.map((r) => [r._id, String((display === "_id" ? r._id : r.data[display]) || r._id)]))
@@ -197,7 +197,7 @@ export async function optionsHandler(req: Request, res: Response) {
       search: typeof req.query.search === "string" ? req.query.search.slice(0, 200) : "",
       ids,
       limit: intParam(req.query.limit, 50, 1, 200),
-      departmentIds: departmentFilter(user, schema),
+      scope: recordScope(user, schema),
     })
   );
 }
@@ -207,7 +207,7 @@ export async function optionsHandler(req: Request, res: Response) {
 export async function getHandler(req: Request, res: Response) {
   const user = currentUser(req);
   const schema = await loadTable(req, "view");
-  const record = await getRecord(schema.tableName, param(req, "id"), departmentFilter(user, schema));
+  const record = await getRecord(schema.tableName, param(req, "id"), recordScope(user, schema));
   if (!record) throw new HttpError(404, "Record not found");
   const creator = record.createdBy ? await getUserOptionsByIds([record.createdBy]) : new Map();
   res.json({
@@ -233,7 +233,7 @@ export async function bulkDeleteHandler(req: Request, res: Response) {
   const deleted = await withTransaction(async (client) => {
     const removed = [];
     for (const id of ids) {
-      const record = await deleteRecord(schema.tableName, id, departmentFilter(user, schema), client);
+      const record = await deleteRecord(schema.tableName, id, recordScope(user, schema), client);
       if (!record) continue;
       removed.push(record);
       await audit(
@@ -305,14 +305,14 @@ export async function updateHandler(req: Request, res: Response) {
   const newDepartmentId = resolveDepartment(user, schema, payload._departmentId, false);
 
   const { before, after } = await withTransaction(async (client) => {
-    const current = await lockRecord(schema.tableName, id, departmentFilter(user, schema), client);
+    const current = await lockRecord(schema.tableName, id, recordScope(user, schema), client);
     if (!current) throw new HttpError(404, "Record not found");
 
     const merged: RecordData = { ...current.data, ...values };
     throwIfErrors(checkRequired(schema, merged));
     throwIfErrors(await checkRelations(user, schema, values, current.data));
 
-    await updateRecord(schema.tableName, id, values, { departmentIds: null, newDepartmentId }, client);
+    await updateRecord(schema.tableName, id, values, { scope: ALL_RECORDS, newDepartmentId }, client);
 
     const changes: Record<string, unknown> = diffRecord(current.data, merged);
     if (newDepartmentId !== undefined && newDepartmentId !== current.departmentId) {
@@ -345,7 +345,7 @@ export async function deleteHandler(req: Request, res: Response) {
   const id = param(req, "id");
 
   const deleted = await withTransaction(async (client) => {
-    const record = await deleteRecord(schema.tableName, id, departmentFilter(user, schema), client);
+    const record = await deleteRecord(schema.tableName, id, recordScope(user, schema), client);
     if (!record) throw new HttpError(404, "Record not found");
     await audit(
       req,

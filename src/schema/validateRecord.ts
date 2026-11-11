@@ -1,4 +1,4 @@
-import { can, departmentFilter, isAdmin } from "../auth/access.js";
+import { can, recordScope, isAdmin } from "../auth/access.js";
 import { getRecordsByIds } from "../repo/recordRepo.js";
 import { existingDepartmentIds, getUserOptionsByIds } from "../repo/userRepo.js";
 import { UPLOAD_URL_PREFIX } from "../storage.js";
@@ -161,7 +161,7 @@ export async function checkRelations(
       continue;
     }
 
-    const found = await getRecordsByIds(refSchema.tableName, ids, departmentFilter(user, refSchema));
+    const found = await getRecordsByIds(refSchema.tableName, ids, recordScope(user, refSchema));
     if (found.length !== ids.length) errors[column.name] = `${label}: linked record not found`;
   }
   return errors;

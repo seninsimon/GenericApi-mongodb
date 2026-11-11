@@ -1,6 +1,6 @@
 import { parse } from "csv-parse";
 import { stringify } from "csv-stringify/sync";
-import { allowedDepartments, can, departmentFilter, isAdmin } from "../auth/access.js";
+import { allowedDepartments, can, recordScope, isAdmin } from "../auth/access.js";
 import { withTransaction } from "../db/pool.js";
 import { audit } from "../repo/auditRepo.js";
 import { setProgress, type Job, type JobResult } from "../repo/jobRepo.js";
@@ -35,7 +35,7 @@ async function resolveRelations(user: CurrentUser, schema: TableSchema, rows: Pa
       cells.forEach((r) => complain(r.line, `${label}: you can't link to "${column.ref}"`));
       continue;
     }
-    const filter = departmentFilter(user, refSchema);
+    const filter = recordScope(user, refSchema);
     const values = [...new Set(cells.flatMap((r) => r.payload[column.name] as string[]))];
 
     const byId = new Set((await getRecordsByIds(refSchema.tableName, values, filter)).map((r) => r._id));

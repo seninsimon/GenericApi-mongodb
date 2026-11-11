@@ -1,6 +1,6 @@
 import { stringify } from "csv-stringify";
 import { once } from "node:events";
-import { can, departmentFilter } from "../auth/access.js";
+import { can, recordScope } from "../auth/access.js";
 import { getRecordsByIds, scanRecords } from "../repo/recordRepo.js";
 import { setProgress, type Job } from "../repo/jobRepo.js";
 import { departmentNames, getUserById, getUserOptionsByIds, userLabel } from "../repo/userRepo.js";
@@ -23,7 +23,7 @@ async function relationLabels(user: CurrentUser, schema: TableSchema, batch: Sto
     const ids = [...new Set(batch.flatMap((r) => ([] as unknown[]).concat(r.data[column.name] ?? []).map(String)))];
     if (!ids.length) continue;
     const display = pickDisplayField(refSchema, column.displayField);
-    const found = await getRecordsByIds(refSchema.tableName, ids, departmentFilter(user, refSchema));
+    const found = await getRecordsByIds(refSchema.tableName, ids, recordScope(user, refSchema));
     labels.set(column.name, new Map(found.map((r) => [r._id, String((display === "_id" ? r._id : r.data[display]) ?? r._id)])));
   }
   return labels;
@@ -76,7 +76,7 @@ export async function runExport(job: Job) {
     // filters are re-validated: columns may have changed since the job was queued
     const filters = parseFilters(job.params.filters ?? [], schema, user);
     const search = typeof job.params.search === "string" ? job.params.search : "";
-    for await (const batch of scanRecords(schema, { departmentIds: departmentFilter(user, schema), search, filters })) {
+    for await (const batch of scanRecords(schema, { scope: recordScope(user, schema), search, filters })) {
       const labels = await relationLabels(user, schema, batch);
       const people = await peopleLabels(schema, batch);
       for (const record of batch) {

@@ -52,7 +52,20 @@ export interface TableSchema {
 }
 
 export type Action = "view" | "create" | "edit" | "delete";
-export type Permissions = Record<Action, boolean>;
+export type Permissions = Record<Action, boolean> & {
+  // only the user's own records: ones they created, or where they're picked in
+  // a "User" column (e.g. Employee, Assigned to)
+  own?: boolean;
+};
+
+// Which records of a table a user can reach.
+export interface RecordScope {
+  // departments to limit to; null = every department and admins-only records (admins)
+  departmentIds: string[] | null;
+  // set when the user may only reach their own records (then departmentIds is null:
+  // their own records count from any of the table's departments)
+  owner: { userId: string; userColumns: string[] } | null;
+}
 export type PermissionMap = Record<string, Permissions>;
 
 export interface CurrentUser {

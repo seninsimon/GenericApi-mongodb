@@ -279,16 +279,18 @@ const DEPARTMENTS: [string, string][] = [
   ["Support", "Customer support"], ["All staff", "Shared lists everyone can use (statuses, staff directory)"],
 ];
 
-const V = { view: true }, VC = { view: true, create: true }, VCE = { view: true, create: true, edit: true };
+const V = { view: true }, VCE = { view: true, create: true, edit: true };
 const ALL = { view: true, create: true, edit: true, delete: true };
+// expense claims are personal: staff see only their own (managers and Finance see all)
+const OWN_CLAIMS = { view: true, create: true, own: true };
 const ROLES: { name: string; description: string; permissions: Record<string, object> }[] = [
-  { name: "Sales rep", description: "Customers, contacts, deals and orders", permissions: { companies: VCE, contacts: VCE, deals: VCE, products: V, orders: VCE, support_tickets: V, expenses: VC, employees: V } },
+  { name: "Sales rep", description: "Customers, contacts, deals and orders", permissions: { companies: VCE, contacts: VCE, deals: VCE, products: V, orders: VCE, support_tickets: V, expenses: OWN_CLAIMS, employees: V } },
   { name: "Sales manager", description: "Full control of the sales pipeline", permissions: { companies: ALL, contacts: ALL, deals: ALL, products: VCE, orders: ALL, support_tickets: V, expenses: VCE, employees: V } },
-  { name: "Marketing", description: "Contacts, campaigns and projects", permissions: { companies: V, contacts: VCE, projects: VCE, tasks: VCE, time_logs: VCE, task_statuses: V, expenses: VC, employees: V } },
-  { name: "Operations", description: "Products, purchasing and delivery", permissions: { companies: V, products: VCE, orders: { view: true, edit: true }, suppliers: VCE, purchase_orders: ALL, projects: VCE, tasks: VCE, time_logs: VCE, task_statuses: V, expenses: VC, employees: V } },
+  { name: "Marketing", description: "Contacts, campaigns and projects", permissions: { companies: V, contacts: VCE, projects: VCE, tasks: VCE, time_logs: VCE, task_statuses: V, expenses: OWN_CLAIMS, employees: V } },
+  { name: "Operations", description: "Products, purchasing and delivery", permissions: { companies: V, products: VCE, orders: { view: true, edit: true }, suppliers: VCE, purchase_orders: ALL, projects: VCE, tasks: VCE, time_logs: VCE, task_statuses: V, expenses: OWN_CLAIMS, employees: V } },
   { name: "Finance", description: "Payments, payroll and expenses", permissions: { companies: V, products: V, orders: V, purchase_orders: { view: true, edit: true }, suppliers: V, payroll: VCE, expenses: ALL, employees: V } },
   { name: "HR", description: "Staff directory, payroll and leave", permissions: { employees: ALL, payroll: ALL, leave_requests: ALL, task_statuses: V } },
-  { name: "IT support", description: "Assets, helpdesk and IT projects", permissions: { assets: ALL, it_tickets: ALL, projects: ALL, tasks: ALL, time_logs: ALL, task_statuses: VCE, expenses: VC, employees: V } },
+  { name: "IT support", description: "Assets, helpdesk and IT projects", permissions: { assets: ALL, it_tickets: ALL, projects: ALL, tasks: ALL, time_logs: ALL, task_statuses: VCE, expenses: OWN_CLAIMS, employees: V } },
   { name: "Support agent", description: "Customer tickets", permissions: { support_tickets: ALL, companies: V, contacts: { view: true, edit: true }, products: V, orders: V, employees: V } },
   { name: "Executive", description: "Read-only view of everything", permissions: Object.fromEntries(TABLES.map((t) => [t.name, V])) },
 ];
