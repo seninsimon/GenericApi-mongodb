@@ -34,6 +34,8 @@ export interface ChoiceOption {
   id: string;
   label: string;
   color: string;
+  // only these roles (ids) may choose it, e.g. "Approved" (admins always may)
+  roles?: string[];
 }
 
 export type RollupFn = "count" | "sum" | "avg" | "min" | "max";

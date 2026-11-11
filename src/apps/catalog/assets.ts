@@ -41,6 +41,10 @@ export const assets: AppBlueprint = {
       ],
     },
   ],
+  dashboard: {
+    tiles: [{ label: "Assets needing repair", table: "assets", filters: [{ field: "condition", op: "in", value: ["Needs repair"] }] }],
+    breakdown: { label: "Assets by category", table: "assets", column: "category" },
+  },
   roles: [managerRole(), staffRole({ assets: VIEW, maintenance: WORK })],
   sample: (ctx) => ({
     assets: [

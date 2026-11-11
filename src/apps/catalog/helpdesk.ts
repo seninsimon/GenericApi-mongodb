@@ -3,7 +3,7 @@ import type { AppBlueprint } from "../types.js";
 
 export const helpdesk: AppBlueprint = {
   key: "helpdesk",
-  version: 1,
+  version: 2, // 2: automations
   name: "Helpdesk",
   description: "Customer or internal tickets with priority, status and an assignee.",
   icon: "IconLifebuoy",
@@ -31,6 +31,31 @@ export const helpdesk: AppBlueprint = {
       ],
     },
   ],
+  automations: [
+    {
+      table: "tickets",
+      name: "When resolved: note the date and tell the requester",
+      trigger: { when: "changed", column: "status", to: "Resolved" },
+      actions: [
+        { do: "set", column: "resolved_on", value: "today" },
+        { do: "notify", who: "requester", message: "Your ticket was resolved" },
+      ],
+    },
+  ],
+  dashboard: {
+    tiles: [
+      { label: "Open tickets", table: "tickets", filters: [{ field: "status", op: "in", value: ["New", "Open", "Waiting"] }] },
+      {
+        label: "Urgent open tickets",
+        table: "tickets",
+        filters: [
+          { field: "status", op: "in", value: ["New", "Open", "Waiting"] },
+          { field: "priority", op: "in", value: ["Urgent"] },
+        ],
+      },
+    ],
+    breakdown: { label: "Tickets by status", table: "tickets", column: "status" },
+  },
   roles: [managerRole(), staffRole({ tickets: WORK })],
   sample: (ctx) => ({
     tickets: [

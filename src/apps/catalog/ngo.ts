@@ -78,6 +78,9 @@ export const ngo: AppBlueprint = {
       ],
     },
   ],
+  dashboard: {
+    tiles: [{ label: "Running programmes", table: "programs", filters: [{ field: "status", op: "in", value: ["Running"] }] }],
+  },
   roles: [managerRole(), staffRole({ programs: VIEW, donors: WORK, donations: WORK, volunteers: WORK, volunteer_hours: WORK })],
   sample: (ctx) => ({
     programs: [

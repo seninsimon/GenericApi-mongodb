@@ -43,6 +43,10 @@ export const crm: AppBlueprint = {
       ],
     },
   ],
+  dashboard: {
+    tiles: [{ label: "Open deals", table: "deals", filters: [{ field: "stage", op: "notIn", value: ["Won", "Lost"] }] }],
+    breakdown: { label: "Deals by stage", table: "deals", column: "stage" },
+  },
   roles: [managerRole(), staffRole({ deals: OWN(WORK), activities: WORK })],
   sample: (ctx) => ({
     deals: [

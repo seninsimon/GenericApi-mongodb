@@ -46,7 +46,10 @@ export const normalizeOptions = (input: unknown): ChoiceOption[] => {
     if (seen.has(key)) throw new HttpError(400, `The option "${label}" is listed twice`);
     seen.add(key);
     const color = (CHOICE_COLORS as readonly string[]).includes(String(item.color)) ? String(item.color) : "";
-    options.push({ id: item.id ? String(item.id).slice(0, 40) : randomUUID().slice(0, 8), label, color });
+    const option: ChoiceOption = { id: item.id ? String(item.id).slice(0, 40) : randomUUID().slice(0, 8), label, color };
+    // an approval step: only these roles may choose it
+    if (Array.isArray(item.roles) && item.roles.length) option.roles = [...new Set(item.roles.map(String))].slice(0, 50);
+    options.push(option);
     if (color) used.add(color);
   }
   if (options.length > MAX_OPTIONS) throw new HttpError(400, `At most ${MAX_OPTIONS} options`);

@@ -104,6 +104,13 @@ export const clinic: AppBlueprint = {
       ],
     },
   ],
+  dashboard: {
+    tiles: [
+      { label: "Appointments today", table: "appointments", filters: [{ field: "date", op: "eq", value: "$today" }] },
+      { label: "Unpaid bills", table: "bills", filters: [{ field: "balance", op: "gt", value: 0 }] },
+    ],
+    breakdown: { label: "Appointments by status", table: "appointments", column: "status" },
+  },
   roles: [
     managerRole(),
     // front desk and doctors share Staff; doctors see the consultations they're the Doctor on

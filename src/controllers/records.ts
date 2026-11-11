@@ -24,6 +24,7 @@ import { assignAutonumbers, autonumberColumns } from "../schema/autonumber.js";
 import { withDefaults } from "../schema/defaults.js";
 import { applyFormulas } from "../schema/formula.js";
 import { refreshParents } from "../schema/rollups.js";
+import { afterSave } from "../schema/automations.js";
 import { deleteChildren, readBack, saveChildren } from "./lineItems.js";
 
 // ?preview=1 on create/update: do the whole save, read back what the server
@@ -310,7 +311,7 @@ export async function createHandler(req: Request, res: Response) {
   const preview = isPreview(req);
 
   const { values, errors } = coerceValues(schema, payload);
-  throwIfErrors({ ...errors, ...(preview ? {} : checkRequired(schema, values)), ...checkChoices(schema, values) });
+  throwIfErrors({ ...errors, ...(preview ? {} : checkRequired(schema, values)), ...checkChoices(schema, values, {}, user) });
   const departmentId = preview
     ? (() => {
         try {
@@ -330,6 +331,8 @@ export async function createHandler(req: Request, res: Response) {
     await saveChildren(req, user, schema, newId, departmentId, payload._children, client, { preview });
     if (preview) throw new PreviewDone(await readBack(schema, newId, client));
     await refreshParents(schema.tableName, [values], client); // totals in the records it links to
+    // "assigned you" notifications, and the table's automations
+    await afterSave(schema, newId, null, values, user._id, user, client);
     await audit(
       req,
       {
@@ -369,7 +372,7 @@ export async function updateHandler(req: Request, res: Response) {
     if (!current) throw new HttpError(404, "Record not found");
 
     const merged: RecordData = { ...current.data, ...values };
-    throwIfErrors({ ...(preview ? {} : checkRequired(schema, merged)), ...checkChoices(schema, values, current.data) });
+    throwIfErrors({ ...(preview ? {} : checkRequired(schema, merged)), ...checkChoices(schema, values, current.data, user) });
     throwIfErrors(await checkRelations(user, schema, values, current.data));
 
     await updateRecord(schema.tableName, id, values, { scope: ALL_RECORDS, newDepartmentId }, client);
@@ -379,6 +382,8 @@ export async function updateHandler(req: Request, res: Response) {
     if (preview) throw new PreviewDone(await readBack(schema, id, client));
     // totals in the records it links to: before (it may have moved) and after
     await refreshParents(schema.tableName, [current.data, merged], client);
+    // "assigned you" notifications, and the table's automations
+    await afterSave(schema, id, current.data, merged, current.createdBy ?? null, user, client);
 
     const changes: Record<string, unknown> = diffRecord(current.data, merged);
     if (newDepartmentId !== undefined && newDepartmentId !== current.departmentId) {

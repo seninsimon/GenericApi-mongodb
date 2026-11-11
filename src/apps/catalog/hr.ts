@@ -3,7 +3,7 @@ import type { AppBlueprint } from "../types.js";
 
 export const hr: AppBlueprint = {
   key: "hr",
-  version: 1,
+  version: 2, // 2: approval steps
   name: "HR & leave",
   description: "Leave requests with approval, attendance and the holiday calendar. Staff see only their own.",
   icon: "IconUsers",
@@ -22,7 +22,8 @@ export const hr: AppBlueprint = {
         date("from", "From", { required: true, default: "today" }),
         date("to", "To", { required: true, default: "today" }),
         formula("days", "Days", "DAYS({to}, {from}) + 1"),
-        choice("status", "Status", [["Pending", "orange"], ["Approved", "green"], ["Rejected", "red"]], { default: "Pending" }),
+        // approving is for managers
+        choice("status", "Status", [["Pending", "orange"], ["Approved", "green"], ["Rejected", "red"]], { default: "Pending", onlyManagers: ["Approved", "Rejected"] }),
         longText("reason", "Reason", { showInTable: false }),
       ],
     },
@@ -48,6 +49,24 @@ export const hr: AppBlueprint = {
       columns: [text("name", "Holiday", { required: true }), date("date", "Date", { required: true }), bool("optional", "Optional")],
     },
   ],
+  automations: [
+    {
+      table: "leave_requests",
+      name: "Tell the person when their leave is approved",
+      trigger: { when: "changed", column: "status", to: "Approved" },
+      actions: [{ do: "notify", who: "$creator", message: "Your leave request was approved" }],
+    },
+    {
+      table: "leave_requests",
+      name: "Tell the person when their leave is rejected",
+      trigger: { when: "changed", column: "status", to: "Rejected" },
+      actions: [{ do: "notify", who: "$creator", message: "Your leave request was rejected" }],
+    },
+  ],
+  dashboard: {
+    tiles: [{ label: "Leave waiting for approval", table: "leave_requests", filters: [{ field: "status", op: "in", value: ["Pending"] }] }],
+    breakdown: { label: "Leave by type", table: "leave_requests", column: "type" },
+  },
   roles: [
     managerRole(),
     // through "Employee" (whose Login account is them): their own leave and attendance

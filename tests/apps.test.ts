@@ -3,6 +3,7 @@ import { APPS, BUNDLES, fullKey } from "../src/apps/index.js";
 import { normalizeColumn } from "../src/schema/columns.js";
 import { checkFormulas } from "../src/schema/formula.js";
 import { checkRollups } from "../src/schema/rollups.js";
+import { normalizeAutomation } from "../src/schema/automations.js";
 import type { Column } from "../src/types.js";
 import { login, unique } from "./helpers.js";
 
@@ -63,6 +64,33 @@ describe("App catalog", () => {
         expect(() => checkFormulas(columnsByKey.get(fullKey(app, table.key))!), `${app.key}.${table.key}`).not.toThrow();
       }
       for (const need of app.needs ?? []) expect(APPS.some((a) => a.key === need), need).toBe(true);
+    }
+    // dashboards count real tables, with real columns and options
+    for (const app of APPS) {
+      const d = app.dashboard;
+      if (!d) continue;
+      for (const tile of d.tiles) {
+        const columns = columnsByKey.get(fullKey(app, tile.table));
+        expect(columns, `${app.key}: ${tile.label}`).toBeTruthy();
+        for (const f of tile.filters ?? []) {
+          const column = columns!.find((c) => c.name === f.field);
+          expect(column, `${app.key}: ${tile.label} / ${f.field}`).toBeTruthy();
+          if (column!.type === "choice" && Array.isArray(f.value)) {
+            for (const v of f.value) expect(column!.options!.some((o) => o.label === v), `${app.key}: ${tile.label} / ${v}`).toBe(true);
+          }
+        }
+      }
+      if (d.breakdown) {
+        const column = columnsByKey.get(fullKey(app, d.breakdown.table))?.find((c) => c.name === d.breakdown!.column);
+        expect(column?.type, `${app.key}: ${d.breakdown.label}`).toBe("choice");
+      }
+    }
+    // automations name real columns of the app's tables
+    for (const app of APPS) {
+      for (const a of app.automations ?? []) {
+        const columns = columnsByKey.get(fullKey(app, a.table))!;
+        expect(() => normalizeAutomation({ tableName: a.table, columns } as never, a), `${app.key}: ${a.name}`).not.toThrow();
+      }
     }
     for (const bundle of BUNDLES) for (const key of bundle.apps) expect(keys.has(key), `${bundle.key}: ${key}`).toBe(true);
     // a bundle key that's also an app key would install the whole bundle
@@ -148,6 +176,18 @@ describe("Installing apps", async () => {
     expect((await admin.post("/api/apps/install", { apps: ["projects"] })).status).toBe(400);
   });
 
+  it("shows the apps' counts on the Home page, for what each person can see", async () => {
+    const boards = (await admin.get("/api/apps/dashboards").expect(200)).body;
+    const projects = boards.find((b: { app: string }) => b.app === "projects");
+    expect(projects.tiles.map((t: { label: string }) => t.label)).toEqual(["Open tasks", "Overdue tasks", "Active projects"]);
+    expect(projects.breakdown).toMatchObject({ table: "tasks", column: "status", options: ["To do", "Doing", "Review", "Done"] });
+    // a tile's count is the list total with its filters ($today included)
+    const count = async (tile: { table: string; filters: object[] }) =>
+      (await admin.get(`/api/table/${tile.table}?limit=1&filters=${encodeURIComponent(JSON.stringify(tile.filters))}`).expect(200)).body.total;
+    expect(await count(projects.tiles[0])).toBe(4); // samples: 4 not done
+    expect(await count(projects.tiles[1])).toBe(0); // none overdue
+  });
+
   it("installs billing: invoices with lines, tax, payments and balance", async () => {
     await admin.post("/api/apps/install", { apps: ["billing"], options: { sampleData: true } }).expect(200);
     const invoices = await records("invoices");
@@ -208,6 +248,10 @@ describe("Installing apps", async () => {
     // and she can ask for leave
     await client.post("/api/table/leave_requests", { employee: asha._id, from: "2026-12-01", to: "2026-12-02" }).expect(200);
     expect((await client.get("/api/table/leave_requests")).body.total).toBe(2);
+    // but not approve it: that's for managers
+    const approved = await client.post("/api/table/leave_requests", { employee: asha._id, from: "2026-12-05", to: "2026-12-05", status: "Approved" });
+    expect(approved.status).toBe(400);
+    expect(approved.body.errors.status).toMatch(/approval step/);
   });
 
   it("names a clashing table, or uses yours when asked", async () => {

@@ -79,6 +79,13 @@ export const billing: AppBlueprint = {
     },
     { ...lines("quote_lines", "quote_lines", "Quote lines", "quotes"), optional: true },
   ],
+  dashboard: {
+    tiles: [
+      { label: "Invoices not fully paid", table: "invoices", filters: [{ field: "balance", op: "gt", value: 0 }, { field: "status", op: "notIn", value: ["Draft", "Cancelled"] }] },
+      { label: "Overdue invoices", table: "invoices", filters: [{ field: "due", op: "before", value: "$today" }, { field: "balance", op: "gt", value: 0 }] },
+    ],
+    breakdown: { label: "Invoices by status", table: "invoices", column: "status" },
+  },
   roles: [
     managerRole(),
     // sales prepare quotes; invoices and payments are for finance

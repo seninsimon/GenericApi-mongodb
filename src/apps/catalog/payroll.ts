@@ -3,7 +3,7 @@ import type { AppBlueprint } from "../types.js";
 
 export const payroll: AppBlueprint = {
   key: "payroll",
-  version: 1,
+  version: 2, // 2: approval steps
   name: "Payroll",
   description: "Monthly payslips with gross and net pay worked out. Staff see only their own payslips.",
   icon: "IconCash",
@@ -25,9 +25,17 @@ export const payroll: AppBlueprint = {
         num("deductions", "Deductions"),
         formula("gross", "Gross pay", "{basic} + {allowances} + {bonus}"),
         formula("net", "Net pay", "{gross} - {deductions}", { indexed: true }),
-        choice("status", "Status", [["Draft", "gray"], ["Approved", "blue"], ["Paid", "green"]], { default: "Draft" }),
+        choice("status", "Status", [["Draft", "gray"], ["Approved", "blue"], ["Paid", "green"]], { default: "Draft", onlyManagers: ["Approved", "Paid"] }),
         date("paid_on", "Paid on"),
       ],
+    },
+  ],
+  automations: [
+    {
+      table: "payslips",
+      name: "When paid: note the date",
+      trigger: { when: "changed", column: "status", to: "Paid" },
+      actions: [{ do: "set", column: "paid_on", value: "today" }],
     },
   ],
   // through "Employee" (whose Login account is them): their own payslips

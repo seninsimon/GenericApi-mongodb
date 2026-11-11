@@ -92,6 +92,12 @@ export const school: AppBlueprint = {
       ],
     },
   ],
+  dashboard: {
+    tiles: [
+      { label: "Fees still due", table: "fees", filters: [{ field: "balance", op: "gt", value: 0 }] },
+      { label: "Absent today", table: "attendance", filters: [{ field: "date", op: "eq", value: "$today" }, { field: "status", op: "in", value: ["Absent"] }] },
+    ],
+  },
   roles: [managerRole(), staffRole({ classes: VIEW, students: VIEW, subjects: VIEW, attendance: WORK, exams: WORK, marks: ALL_RIGHTS, fees: VIEW })],
   sample: (ctx) => ({
     classes: [{ $id: "c7", name: "Class 7 A", teacher: ctx.me, room: "201" }],

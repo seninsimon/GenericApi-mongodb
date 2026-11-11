@@ -3,7 +3,7 @@ import type { AppBlueprint } from "../types.js";
 
 export const expenses: AppBlueprint = {
   key: "expenses",
-  version: 1,
+  version: 2, // 2: approval steps
   name: "Expense claims",
   description: "Staff claim what they spent, with a receipt; managers approve and reimburse. Staff see only their own claims.",
   icon: "IconReceiptRefund",
@@ -22,11 +22,32 @@ export const expenses: AppBlueprint = {
         choice("category", "Category", ["Travel", "Meals", "Office supplies", "Software", "Training", "Other"]),
         num("amount", "Amount", { required: true, indexed: true }),
         file("receipt", "Receipt"),
-        choice("status", "Status", [["Submitted", "orange"], ["Approved", "blue"], ["Rejected", "red"], ["Reimbursed", "green"]], { default: "Submitted" }),
+        choice("status", "Status", [["Submitted", "orange"], ["Approved", "blue"], ["Rejected", "red"], ["Reimbursed", "green"]], {
+          default: "Submitted",
+          onlyManagers: ["Approved", "Rejected", "Reimbursed"],
+        }),
         longText("notes", "Notes", { showInTable: false }),
       ],
     },
   ],
+  automations: [
+    {
+      table: "claims",
+      name: "Tell the claimant when it's approved",
+      trigger: { when: "changed", column: "status", to: "Approved" },
+      actions: [{ do: "notify", who: "claimant", message: "Your expense claim was approved" }],
+    },
+    {
+      table: "claims",
+      name: "Tell the claimant when it's paid back",
+      trigger: { when: "changed", column: "status", to: "Reimbursed" },
+      actions: [{ do: "notify", who: "claimant", message: "Your expense claim was paid back" }],
+    },
+  ],
+  dashboard: {
+    tiles: [{ label: "Claims waiting for approval", table: "claims", filters: [{ field: "status", op: "in", value: ["Submitted"] }] }],
+    breakdown: { label: "Claims by category", table: "claims", column: "category" },
+  },
   roles: [managerRole(), staffRole({ claims: OWN({ view: true, create: true, edit: true }) })],
   sample: (ctx) => ({
     claims: [

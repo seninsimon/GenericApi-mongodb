@@ -79,6 +79,12 @@ export const inventory: AppBlueprint = {
       formula("low_stock", "Low stock", 'IF({stock} <= {reorder_level} and {reorder_level} > 0, "Low", "")'),
     ],
   },
+  dashboard: {
+    tiles: [
+      { label: "Products low on stock", table: "products.products", filters: [{ field: "low_stock", op: "eq", value: "Low" }] },
+      { label: "Purchase orders on the way", table: "purchase_orders", filters: [{ field: "status", op: "in", value: ["Ordered"] }] },
+    ],
+  },
   roles: [managerRole(), staffRole({ suppliers: VIEW, purchase_orders: WORK, po_lines: { view: true, create: true, edit: true, delete: true }, stock_moves: WORK })],
   sample: (ctx) => ({
     suppliers: [

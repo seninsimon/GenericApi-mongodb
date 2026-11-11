@@ -99,7 +99,14 @@ const kindOf = (column: Column): Kind => {
 };
 
 const MAX_FILTERS = 20;
-const isDate = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+// "$today" stands for the current date, so a saved "Overdue" view keeps working
+export const TODAY_TOKEN = "$today";
+const isDate = (v: unknown): v is string => typeof v === "string" && (/^\d{4}-\d{2}-\d{2}$/.test(v) || v === TODAY_TOKEN);
+const todayIso = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const dateValue = (v: unknown) => (v === TODAY_TOKEN ? todayIso() : v);
 const isNumber = (v: unknown) => v !== "" && v !== null && Number.isFinite(Number(v));
 
 // Parse and validate the ?filters= query value against the table's columns.
@@ -203,10 +210,10 @@ export function filterConditions(schema: TableSchema, filters: RecordFilter[], p
       }
       case "date": {
         const day = `left(${text}, 10)`;
-        if (f.op === "eq") return `${day} = ${p(f.value)}`;
-        if (f.op === "before") return `${day} < ${p(f.value)}`;
-        if (f.op === "after") return `${day} > ${p(f.value)}`;
-        return `${day} BETWEEN ${p(f.value)} AND ${p(f.value2)}`; // between
+        if (f.op === "eq") return `${day} = ${p(dateValue(f.value))}`;
+        if (f.op === "before") return `${day} < ${p(dateValue(f.value))}`;
+        if (f.op === "after") return `${day} > ${p(dateValue(f.value))}`;
+        return `${day} BETWEEN ${p(dateValue(f.value))} AND ${p(dateValue(f.value2))}`; // between
       }
       case "boolean":
         return f.op === "isTrue" ? `${json} = 'true'::jsonb` : `${json} = 'false'::jsonb`;

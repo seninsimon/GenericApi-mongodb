@@ -6,6 +6,8 @@ import type { Permissions } from "../types.js";
 
 // Like a column definition, but a link's `ref` is a table key: "tasks" (same
 // app) or "people.employees" (another app, which must be in `needs`).
+// A choice may list `onlyManagers: ["Approved", "Rejected"]`: options only the
+// Manager role may choose (an approval step).
 export type ColumnBlueprint = Record<string, unknown> & { name: string; label: string; type?: string; ref?: string };
 
 export interface TableBlueprint {
@@ -51,7 +53,18 @@ export interface AppBlueprint {
   // Inventory adds stock on hand to "products.products"; removed with the app
   extend?: Record<string, ColumnBlueprint[]>;
   roles?: RoleBlueprint[];
+  // "when Status becomes Approved -> notify the person who asked" (table key;
+  // trigger and actions as in src/schema/automations.ts)
+  automations?: { table: string; name: string; trigger: Record<string, unknown>; actions: Record<string, unknown>[] }[];
   sample?: (ctx: SampleContext) => Record<string, SampleRow[]>;
+  // on the Home page: a few counts ("Open tasks") and one breakdown ("Tasks by status")
+  dashboard?: DashboardBlueprint;
+}
+
+export type TileFilter = { field: string; op: string; value?: unknown; value2?: unknown };
+export interface DashboardBlueprint {
+  tiles: { label: string; table: string; filters?: TileFilter[] }[];
+  breakdown?: { label: string; table: string; column: string };
 }
 
 // An organization type: a set of apps installed together.

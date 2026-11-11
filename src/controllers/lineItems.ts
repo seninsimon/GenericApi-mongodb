@@ -117,7 +117,7 @@ export async function saveChildren(
       need("create");
       const { values, errors: fieldErrors } = coerceValues(schema, withDefaults(schema, own(line ?? {}), user));
       values[link.name] = parentId;
-      rowErrors("create", i, { ...fieldErrors, ...(opts.preview ? {} : checkRequired(schema, values)), ...checkChoices(schema, values) });
+      rowErrors("create", i, { ...fieldErrors, ...(opts.preview ? {} : checkRequired(schema, values)), ...checkChoices(schema, values, {}, user) });
       rowErrors("create", i, await checkRelations(user, schema, withoutLink(values)));
       created.push({ i, values });
     }
@@ -137,7 +137,7 @@ export async function saveChildren(
       rowErrors("update", i, {
         ...fieldErrors,
         ...(opts.preview ? {} : checkRequired(schema, merged)),
-        ...checkChoices(schema, values, current.data),
+        ...checkChoices(schema, values, current.data, user),
       });
       rowErrors("update", i, await checkRelations(user, schema, values, current.data));
       updated.push({ i, id, values, before: current.data });

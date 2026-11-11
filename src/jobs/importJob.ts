@@ -188,7 +188,7 @@ export async function runImport(job: Job) {
       messages.push(
         ...Object.values(fieldErrors),
         ...Object.values(checkRequired(schema, values)),
-        ...Object.values(checkChoices(schema, values))
+        ...Object.values(checkChoices(schema, values, {}, user))
       );
 
       let departmentId: string | null | undefined = defaultDepartment;

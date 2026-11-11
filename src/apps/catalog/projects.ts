@@ -61,6 +61,14 @@ export const projects: AppBlueprint = {
       ],
     },
   ],
+  dashboard: {
+    tiles: [
+      { label: "Open tasks", table: "tasks", filters: [{ field: "status", op: "notIn", value: ["Done"] }] },
+      { label: "Overdue tasks", table: "tasks", filters: [{ field: "due", op: "before", value: "$today" }, { field: "status", op: "notIn", value: ["Done"] }] },
+      { label: "Active projects", table: "projects", filters: [{ field: "status", op: "in", value: ["Active"] }] },
+    ],
+    breakdown: { label: "Tasks by status", table: "tasks", column: "status" },
+  },
   roles: [
     managerRole(),
     // everyone in the team sees the team's tasks; time logs are personal

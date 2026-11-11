@@ -7,6 +7,7 @@ import { departmentOptionsHandler, userOptionsHandler } from "./controllers/peop
 import * as jobs from "./controllers/jobs.js";
 import * as records from "./controllers/records.js";
 import * as apps from "./controllers/apps.js";
+import * as notifications from "./controllers/notifications.js";
 import * as schema from "./controllers/schema.js";
 import { handle } from "./lib/http.js";
 import { requireAdmin, requireAuth } from "./middleware/auth.js";
@@ -55,10 +56,20 @@ r.post("/schema/:table/column", adminOnly, handle(schema.addColumnHandler));
 r.put("/schema/:table/column/:name", adminOnly, handle(schema.updateColumnHandler));
 r.delete("/schema/:table/column/:column", adminOnly, handle(schema.deleteColumnHandler));
 r.post("/schema/:table/formula/check", adminOnly, handle(schema.checkFormulaHandler));
+r.get("/schema/:table/automations", adminOnly, handle(notifications.listAutomationsHandler));
+r.post("/schema/:table/automations", adminOnly, handle(notifications.createAutomationHandler));
+r.put("/schema/:table/automations/:id", adminOnly, handle(notifications.updateAutomationHandler));
+r.delete("/schema/:table/automations/:id", adminOnly, handle(notifications.deleteAutomationHandler));
+
+// the bell: your own notifications
+r.get("/notifications", requireAuth, handle(notifications.listNotificationsHandler));
+r.post("/notifications/read", requireAuth, handle(notifications.readNotificationsHandler));
 
 // apps (Projects, HR, ...): catalog, preview, install, remove
 r.get("/apps", adminOnly, handle(apps.listAppsHandler));
+r.get("/apps/dashboards", requireAuth, handle(apps.dashboardsHandler));
 r.post("/apps/plan", adminOnly, handle(apps.planHandler));
+r.post("/apps/draft", adminOnly, handle(apps.draftHandler));
 r.post("/apps/install", adminOnly, handle(apps.installHandler));
 r.delete("/apps/:key", adminOnly, handle(apps.uninstallHandler));
 r.delete("/apps/:key/sample", adminOnly, handle(apps.removeSampleHandler));

@@ -133,10 +133,25 @@ export function coerceValues(schema: TableSchema, payload: Record<string, unknow
 // Choice values must be one of the column's options. Values the record
 // already had are fine (an option removed later stays on old records until
 // someone changes that field).
-export function checkChoices(schema: TableSchema, values: RecordData, previous: RecordData = {}): Errors {
+export function checkChoices(
+  schema: TableSchema,
+  values: RecordData,
+  previous: RecordData = {},
+  // who's choosing: options limited to some roles ("Approved") need one of them
+  user?: CurrentUser
+): Errors {
   const errors: Errors = {};
   for (const column of schema.columns) {
     if (column.type !== "choice" || !(column.name in values)) continue;
+    if (user && !user.role.isAdmin) {
+      const before = new Set(([] as unknown[]).concat(previous[column.name] ?? []));
+      const chosen = ([] as unknown[]).concat(values[column.name] ?? []).filter((v) => !before.has(v));
+      const locked = (column.options ?? []).find((o) => o.roles?.length && chosen.includes(o.label) && !o.roles.includes(user.role._id));
+      if (locked) {
+        errors[column.name] = `Only some roles can set ${column.label || column.name} to "${locked.label}" (it's an approval step)`;
+        continue;
+      }
+    }
     const allowed = new Set([
       ...(column.options ?? []).map((o) => o.label),
       ...([] as unknown[]).concat(previous[column.name] ?? []).filter((v): v is string => typeof v === "string"),

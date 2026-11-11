@@ -8,6 +8,7 @@ import { FILE_COLUMN_TYPES, normalizeColumn, validateTableName } from "../schema
 import { withDefaults } from "../schema/defaults.js";
 import { applyFormulas, checkFormulas, formulaRefs } from "../schema/formula.js";
 import { checkRollups, rollupsOver } from "../schema/rollups.js";
+import { normalizeAutomation } from "../schema/automations.js";
 import { deleteTable, findRelationsTo, getAllSchemas, getSchema, invalidateSchemas } from "../schema/schemaRepo.js";
 import { coerceValues } from "../schema/validateRecord.js";
 import type { Column, CurrentUser, Permissions, RecordData, TableSchema } from "../types.js";
@@ -33,6 +34,8 @@ export interface InstallOptions {
   // a table name that's already taken by one of your own tables:
   // "new" (default) = create "tasks_2"; "use" = use your table for it
   conflicts?: Record<string, "new" | "use">;
+  // a drafted app's draft (kept with the install, see apps/draft.ts)
+  draft?: unknown;
 }
 
 export interface PlannedTable {
@@ -447,6 +450,42 @@ export async function install(keys: string[], options: InstallOptions, user: Cur
           role.description,
           JSON.stringify(perms),
         ], client);
+      }
+    }
+
+    // 2b. approval steps: options only the Manager role may choose
+    const managerId = (await loadRoles(client)).get("manager")?._id;
+    if (managerId) {
+      for (const entry of p.tables) {
+        if (entry.action !== "create" || !entry.tableName) continue;
+        const bp = tableBlueprint(entry.key)!;
+        const schema = schemaFor.get(entry.tableName)!;
+        let changed = false;
+        for (const c of bp.columns) {
+          const only = c.onlyManagers as string[] | undefined;
+          const column = schema.columns.find((x) => x.name === c.name);
+          if (!only?.length || !column?.options) continue;
+          for (const o of column.options) if (only.includes(o.label)) o.roles = [managerId];
+          changed = true;
+        }
+        if (changed) {
+          await query(`UPDATE table_schemas SET columns = $2::jsonb WHERE table_name = $1`, [entry.tableName, JSON.stringify(schema.columns)], client);
+        }
+      }
+    }
+
+    // 2c. the apps' automations, on tables made now
+    for (const app of ctx.appsToInstall) {
+      for (const a of app.automations ?? []) {
+        const entry = byKey.get(fullKey(app, a.table));
+        const schema = entry?.action === "create" && entry.tableName ? schemaFor.get(entry.tableName) : undefined;
+        if (!schema) continue;
+        const clean = normalizeAutomation(schema, a);
+        await query(
+          `INSERT INTO automations (table_name, name, trigger, actions) VALUES ($1, $2, $3::jsonb, $4::jsonb)`,
+          [schema.tableName, clean.name, JSON.stringify(clean.trigger), JSON.stringify(clean.actions)],
+          client
+        );
       }
     }
 
