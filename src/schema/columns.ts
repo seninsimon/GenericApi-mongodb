@@ -13,7 +13,7 @@ const DISPLAYABLE_TYPES: ColumnType[] = ["text", "number", "date", "textarea"];
 
 // column types whose values are ids (of records / users): their type is fixed
 // once created, since existing values can't be converted
-const ID_TYPES: ColumnType[] = ["relation", "user"];
+const ID_TYPES: ColumnType[] = ["relation", "user", "department"];
 
 // older spellings that may still arrive from clients or stored schemas
 const TYPE_ALIASES: Record<string, ColumnType> = { richText: "richtext" };

@@ -134,8 +134,8 @@ describe('"User" columns and "Created by"', async () => {
     const exportJob = (await world.user.post(`/api/table/${t}/export`, { search: "By name" })).body.job;
     await drainJobs();
     const lines = (await world.user.get(`/api/jobs/${exportJob._id}/download`)).text.replace(/^﻿/, "").trim().split(/\r?\n/);
-    expect(lines[0]).toBe("Title,Assignee,Reviewers,Department,Created by");
-    expect(lines[1]).toBe(`By name,Chris Colleague,${world.username},${world.dept.name},${world.username}`);
+    expect(lines[0]).toBe("Title,Assignee,Reviewers,Created by");
+    expect(lines[1]).toBe(`By name,Chris Colleague,${world.username},${world.username}`);
   });
 
   it("fills in Created by for older records from the audit log (migration 003)", async () => {

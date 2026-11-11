@@ -93,7 +93,24 @@ export async function updateTableSettingsHandler(req: Request, res: Response) {
     tableName,
     changes: { showInMenu: schema.showInMenu, departments: schema.departments.map((d) => d.name) },
   });
-  res.json({ message: "Table settings updated", data: schema });
+
+  // A table shared with one department never keeps "admins only" records:
+  // e.g. records added before the table was shared become visible to it.
+  // (With several departments the admin chooses, in the table's settings.)
+  let moved = 0;
+  if (schema.departments.length === 1) {
+    const [only] = schema.departments;
+    moved = await assignUnassigned(schema.tableName, only._id);
+    if (moved) {
+      await audit(req, {
+        action: "assign_unassigned",
+        entity: "table",
+        tableName,
+        changes: { department: only.name, records: moved },
+      });
+    }
+  }
+  res.json({ message: "Table settings updated", data: schema, moved });
 }
 
 // PUT /schema/:table/unassigned { departmentId }: records without a department go there

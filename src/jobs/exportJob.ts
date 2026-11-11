@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { can, departmentFilter } from "../auth/access.js";
 import { getRecordsByIds, scanRecords } from "../repo/recordRepo.js";
 import { setProgress, type Job } from "../repo/jobRepo.js";
-import { getUserById, getUserOptionsByIds, userLabel } from "../repo/userRepo.js";
+import { departmentNames, getUserById, getUserOptionsByIds, userLabel } from "../repo/userRepo.js";
 import { pickDisplayField } from "../schema/columns.js";
 import { parseFilters } from "../schema/filters.js";
 import { getSchema } from "../schema/schemaRepo.js";
@@ -48,7 +48,14 @@ export async function runExport(job: Job) {
   if (!schema) throw new Error(`Table "${job.tableName}" no longer exists`);
   if (!can(user, schema, "view")) throw new Error("You no longer have access to this table");
 
-  const header = [...schema.columns.map((c) => c.label || c.name), DEPARTMENT_HEADER, CREATED_BY_HEADER];
+  // "Visible to" only when the table is shared with several departments (as in the list)
+  const withDepartment = schema.departments.length > 1;
+  const header = [
+    ...schema.columns.map((c) => c.label || c.name),
+    ...(withDepartment ? [DEPARTMENT_HEADER] : []),
+    CREATED_BY_HEADER,
+  ];
+  const departments = schema.columns.some((c) => c.type === "department") ? await departmentNames() : new Map<string, string>();
   // BOM so Excel opens UTF-8 correctly
   const csv = stringify({ bom: true });
   const key = `exports/${job._id}.csv`;
@@ -67,7 +74,7 @@ export async function runExport(job: Job) {
   try {
     await write(header);
     // filters are re-validated: columns may have changed since the job was queued
-    const filters = parseFilters(job.params.filters ?? [], schema, user._id);
+    const filters = parseFilters(job.params.filters ?? [], schema, user);
     const search = typeof job.params.search === "string" ? job.params.search : "";
     for await (const batch of scanRecords(schema, { departmentIds: departmentFilter(user, schema), search, filters })) {
       const labels = await relationLabels(user, schema, batch);
@@ -75,9 +82,13 @@ export async function runExport(job: Job) {
       for (const record of batch) {
         await write([
           ...schema.columns.map((c) =>
-            formatCell(c, record.data[c.name], c.type === "user" ? people.map : labels.get(c.name))
+            formatCell(
+              c,
+              record.data[c.name],
+              c.type === "user" ? people.map : c.type === "department" ? departments : labels.get(c.name)
+            )
           ),
-          record.departmentName ?? "",
+          ...(withDepartment ? [record.departmentName ?? ""] : []),
           people.label(record.createdBy),
         ]);
       }

@@ -4,8 +4,9 @@ import { withTransaction } from "../db/pool.js";
 import { HttpError, intParam, param, toIdList } from "../lib/http.js";
 import { currentUser } from "../middleware/auth.js";
 import { audit, diffRecord, snapshot } from "../repo/auditRepo.js";
-import { getUserOptionsByIds, userLabel } from "../repo/userRepo.js";
+import { departmentLabel, departmentNames, getUserOptionsByIds, userLabel } from "../repo/userRepo.js";
 import {
+  countUnassigned,
   deleteRecord,
   getRecord,
   getRecordOptions,
@@ -88,7 +89,7 @@ export async function listHandler(req: Request, res: Response) {
 
   const result = await listRecords(schema, {
     search: typeof req.query.search === "string" ? req.query.search.slice(0, 200) : "",
-    filters: parseFilters(req.query.filters, schema, user._id),
+    filters: parseFilters(req.query.filters, schema, user),
     sort: resolveSort(schema, req.query.sort),
     order: req.query.order === "asc" ? "asc" : "desc",
     page,
@@ -120,7 +121,15 @@ export async function listHandler(req: Request, res: Response) {
     ...result.rows.flatMap((r) => userColumns.flatMap((c) => fileUrls(r.data[c.name]))),
   ]);
 
-  const withDepartment = isAdmin(user) || allowedDepartments(user, schema).length > 1;
+  const departments = schema.columns.some((c) => c.type === "department") ? await departmentNames() : new Map();
+
+  // "Visible to" only matters when the table is shared with several
+  // departments (with one, every record is in it), and only to people who can
+  // see more than one of them. Admins also see it while some records are
+  // "admins only" (e.g. after their department was deleted), so they can spot them.
+  const withDepartment =
+    (schema.departments.length > 1 && (isAdmin(user) || allowedDepartments(user, schema).length > 1)) ||
+    (isAdmin(user) && (await countUnassigned(schema.tableName)) > 0);
   const relationLabel = (labels: Map<string, string> | undefined, id: unknown) =>
     id ? (labels?.get(String(id)) ?? "—") : "";
 
@@ -138,7 +147,11 @@ export async function listHandler(req: Request, res: Response) {
     for (const column of schema.columns) {
       const value = row.data[column.name];
       if (column.type === "richtext") out[column.name] = htmlToText(value, 160);
-      else if (column.type === "user") {
+      else if (column.type === "department") {
+        out[column.name] = Array.isArray(value)
+          ? value.map((id) => departmentLabel(departments, id))
+          : departmentLabel(departments, value) || null;
+      } else if (column.type === "user") {
         out[column.name] = Array.isArray(value)
           ? value.map((id) => userLabel(people, id))
           : userLabel(people, value) || null;
@@ -151,7 +164,7 @@ export async function listHandler(req: Request, res: Response) {
       } else out[column.name] = value ?? null;
     }
     if (withDepartment) {
-      out._department = row.departmentName ?? "Unassigned";
+      out._department = row.departmentName ?? "Admins only";
       out._departmentId = row.departmentId;
     }
     return out;

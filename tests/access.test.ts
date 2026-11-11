@@ -113,10 +113,10 @@ describe("access control", async () => {
     expect((await admin.del(`/api/roles/${me.role._id}`)).status).toBe(400);
   });
 
-  it("deleting a department unassigns its records", async () => {
+  it("deleting a department makes its records admins-only (and admins can see which)", async () => {
     expect((await admin.del(`/api/departments/${hr._id}`)).status).toBe(200);
     const list = await admin.get(`/api/table/${projects}?limit=100`);
-    expect(list.body.data.some((r: { _department: string }) => r._department === "Unassigned")).toBe(true);
+    expect(list.body.data.some((r: { _department: string }) => r._department === "Admins only")).toBe(true);
     expect((await bob.get("/api/schema")).body).toEqual([]);
   });
 });

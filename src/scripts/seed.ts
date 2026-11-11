@@ -189,7 +189,7 @@ const TABLES: { name: string; departments: string[]; columns: Col[] }[] = [
     text("email", "Email"), text("phone", "Phone"), text("city", "City", { indexed: true }), date("last_contacted", "Last contacted"), bool("newsletter", "Newsletter"),
   ] },
   { name: "employees", departments: ["All staff"], columns: [
-    text("full_name", "Name", { required: true, indexed: true }), text("team", "Team", { indexed: true }), text("job_title", "Job title", { indexed: true }),
+    text("full_name", "Name", { required: true, indexed: true }), { name: "team", label: "Team", type: "department" }, text("job_title", "Job title", { indexed: true }),
     text("email", "Email"), text("phone", "Phone"), text("location", "Location", { indexed: true }), date("joined_on", "Joined on"), bool("active", "Active"),
     { name: "photo", label: "Photo", type: "image" },
   ] },
@@ -423,7 +423,7 @@ async function main() {
     empRows.push({
       id, dept: dept["All staff"], createdAt: createdAround(joined),
       data: {
-        full_name: name, team, job_title: pick(JOBS[team]), email: `${name.toLowerCase().replace(/[^a-z]+/g, ".")}@zenin-demo.example`,
+        full_name: name, team: dept[team], job_title: pick(JOBS[team]), email: `${name.toLowerCase().replace(/[^a-z]+/g, ".")}@zenin-demo.example`,
         phone: `+91 9${int(100000000, 999999999)}`, location: pick(CITIES.slice(0, 8)), joined_on: joined, active: chance(0.94),
         photo: idx < 60 ? await upload(`photo-${idx}.png`, png(int(0, 359)), "image/png") : null,
       },

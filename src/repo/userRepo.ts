@@ -433,3 +433,13 @@ export async function findActiveUsers(values: string[]): Promise<UserOption[]> {
 // Display name for a user id from getUserOptionsByIds ("" for no id).
 export const userLabel = (options: Map<string, UserOption>, id: unknown): string =>
   id ? (options.get(String(id))?.label ?? "Deleted user") : "";
+
+// Department names by id, for "Department" columns (all departments; the list is small).
+export async function departmentNames(): Promise<Map<string, string>> {
+  const { rows } = await query<{ _id: string; name: string }>(`SELECT _id, name FROM departments`);
+  return new Map(rows.map((r) => [r._id, r.name]));
+}
+
+// Display name for a department id ("" for no id).
+export const departmentLabel = (names: Map<string, string>, id: unknown): string =>
+  id ? (names.get(String(id)) ?? "Deleted department") : "";

@@ -304,13 +304,14 @@ export const countUnassigned = (tableName: string) =>
     return rows[0].n;
   }, 0);
 
-export async function assignUnassigned(tableName: string, departmentId: string) {
-  const { rowCount } = await query(
-    `UPDATE ${dataTable(tableName)} SET department_id = $1, updated_at = now() WHERE department_id IS NULL`,
-    [departmentId]
-  );
-  return rowCount ?? 0;
-}
+export const assignUnassigned = (tableName: string, departmentId: string) =>
+  orEmpty(async () => {
+    const { rowCount } = await query(
+      `UPDATE ${dataTable(tableName)} SET department_id = $1, updated_at = now() WHERE department_id IS NULL`,
+      [departmentId]
+    );
+    return rowCount ?? 0;
+  }, 0);
 
 // Read a table in batches in insertion order (exports), within departmentIds.
 export async function* scanRecords(

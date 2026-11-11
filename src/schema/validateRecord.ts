@@ -1,6 +1,6 @@
 import { can, departmentFilter, isAdmin } from "../auth/access.js";
 import { getRecordsByIds } from "../repo/recordRepo.js";
-import { getUserOptionsByIds } from "../repo/userRepo.js";
+import { existingDepartmentIds, getUserOptionsByIds } from "../repo/userRepo.js";
 import { UPLOAD_URL_PREFIX } from "../storage.js";
 import type { Column, CurrentUser, RecordData, TableSchema } from "../types.js";
 import { getSchema } from "./schemaRepo.js";
@@ -62,8 +62,9 @@ function coerce(column: Column, value: unknown): unknown {
       return value;
     }
     case "relation":
-    case "user": {
-      const what = column.type === "user" ? "user" : "record";
+    case "user":
+    case "department": {
+      const what = column.type === "relation" ? "record" : column.type;
       if (column.multiple) {
         const list = Array.isArray(value) ? value : value === "" ? [] : [value];
         if (!list.every((v) => typeof v === "string" && v)) throw `must be a list of ${what} ids`;
@@ -129,7 +130,7 @@ export async function checkRelations(
 
   for (const column of schema.columns) {
     if (!(column.name in values)) continue;
-    if (column.type !== "user" && (column.type !== "relation" || !column.ref)) continue;
+    if (column.type !== "user" && column.type !== "department" && (column.type !== "relation" || !column.ref)) continue;
 
     const before = new Set(
       ([] as unknown[]).concat(previous[column.name] ?? []).filter((v): v is string => typeof v === "string")
@@ -144,6 +145,10 @@ export async function checkRelations(
       // newly chosen people must be existing, active accounts
       const found = await getUserOptionsByIds(ids);
       if (ids.some((id) => !found.get(id)?.isActive)) errors[column.name] = `${label}: user not found or deactivated`;
+      continue;
+    }
+    if (column.type === "department") {
+      if ((await existingDepartmentIds(ids)).length !== ids.length) errors[column.name] = `${label}: department not found`;
       continue;
     }
     const refSchema = await getSchema(column.ref!);

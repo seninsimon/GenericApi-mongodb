@@ -8,6 +8,8 @@ export const COLUMN_TYPES = [
   "relation",
   // a person: the _id of a user account
   "user",
+  // one of the company's departments (data, e.g. "Works in"; not record access)
+  "department",
   "image",
   "images",
   "file",

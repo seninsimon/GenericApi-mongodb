@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { intParam } from "../lib/http.js";
-import { getUserOptionsByIds, searchUserOptions } from "../repo/userRepo.js";
+import { departmentNames, getUserOptionsByIds, searchUserOptions } from "../repo/userRepo.js";
 
 // GET /api/users/options?search=&limit=   active people for "User" columns and filters
 // GET /api/users/options?ids=a,b          names for these ids (any status; deleted ones too)
@@ -16,4 +16,13 @@ export async function userOptionsHandler(req: Request, res: Response) {
   }
   const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 100) : "";
   res.json(await searchUserOptions(search, intParam(req.query.limit, 50, 1, 200)));
+}
+
+// GET /api/departments/options   every department, for "Department" columns and filters
+// (names only, open to every logged-in user).
+export async function departmentOptionsHandler(_req: Request, res: Response) {
+  const names = await departmentNames();
+  res.json(
+    [...names].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label))
+  );
 }
