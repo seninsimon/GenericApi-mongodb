@@ -29,6 +29,7 @@ type SchemaRow = {
   table_name: string;
   columns: (Partial<Column> & Record<string, unknown>)[];
   show_in_menu: boolean;
+  by_department: boolean;
   blueprint_key: string | null;
   app_key: string | null;
   departments: { _id: string; name: string }[];
@@ -43,6 +44,7 @@ const toSchema = (row: SchemaRow): TableSchema => ({
   columns: row.columns.map((c) => normalizeColumn(c, { strict: false })),
   showInMenu: row.show_in_menu,
   departments: row.departments ?? [],
+  byDepartment: row.by_department ?? true,
   blueprintKey: row.blueprint_key ?? null,
   appKey: row.app_key ?? null,
   createdAt: row.created_at,
@@ -125,7 +127,8 @@ export async function startSchemaListener(): Promise<() => Promise<void>> {
 
 /* ============================ changes ============================ */
 
-export async function createTable(input: { tableName: unknown; columns?: unknown[]; showInMenu?: boolean }) {
+// byDepartment: "who sees the records" (see TableSchema); true when not given
+export async function createTable(input: { tableName: unknown; columns?: unknown[]; showInMenu?: boolean; byDepartment?: unknown }) {
   const tableName = validateTableName(input.tableName);
   const columns = (input.columns ?? []).map((c) => normalizeColumn(c as Record<string, unknown>));
   await checkRollups(tableName, columns);
@@ -134,10 +137,11 @@ export async function createTable(input: { tableName: unknown; columns?: unknown
 
   await ensureDataTable(tableName);
   try {
-    await query(`INSERT INTO table_schemas (table_name, columns, show_in_menu) VALUES ($1, $2::jsonb, $3)`, [
+    await query(`INSERT INTO table_schemas (table_name, columns, show_in_menu, by_department) VALUES ($1, $2::jsonb, $3, $4)`, [
       tableName,
       JSON.stringify(columns),
       input.showInMenu ?? true,
+      typeof input.byDepartment === "boolean" ? input.byDepartment : true,
     ]);
   } catch (error) {
     if ((error as { code?: string }).code === "23505") throw new HttpError(409, "Table already exists");
@@ -267,15 +271,18 @@ export async function deleteColumn(tableName: string, columnName: string) {
   return { schema, removed: removed! };
 }
 
-// settings: { showInMenu?, departmentIds? }
+// settings: { showInMenu?, byDepartment?, departmentIds? }
 export async function updateTableSettings(
   tableName: string,
-  settings: { showInMenu?: unknown; departmentIds?: string[] }
+  settings: { showInMenu?: unknown; byDepartment?: unknown; departmentIds?: string[] }
 ) {
+  const flag = (v: unknown) => (typeof v === "boolean" ? v : null);
   const updated = await withTransaction(async (client) => {
     const { rowCount } = await query(
-      `UPDATE table_schemas SET show_in_menu = COALESCE($2, show_in_menu), updated_at = now() WHERE table_name = $1`,
-      [tableName, typeof settings.showInMenu === "boolean" ? settings.showInMenu : null],
+      `UPDATE table_schemas
+       SET show_in_menu = COALESCE($2, show_in_menu), by_department = COALESCE($3, by_department), updated_at = now()
+       WHERE table_name = $1`,
+      [tableName, flag(settings.showInMenu), flag(settings.byDepartment)],
       client
     );
     if (!rowCount) return false;

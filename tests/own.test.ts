@@ -115,8 +115,11 @@ describe('"Own only" permission', async () => {
       await admin.post("/api/roles", { name: unique("Creator"), permissions: { [employees]: { create: true, own: true } } })
     ).body.role;
     const maker = await mk("maker", creatorRole._id);
-    const id = (await maker.client.post(`/api/table/${employees}`, { title: "Made by me", employee: ebin.id })).body.data
-      .insertedId;
+    // they can't put someone else in it…
+    expect((await maker.client.post(`/api/table/${employees}`, { title: "For Ebin", employee: ebin.id })).status).toBe(400);
+    // …it's theirs (filled in), and stays visible to them after an admin hands it to Ebin
+    const id = (await maker.client.post(`/api/table/${employees}`, { title: "Made by me" })).body.data.insertedId;
+    await admin.put(`/api/table/${employees}/${id}`, { employee: ebin.id }).expect(200);
     const rows = (await maker.client.get(`/api/table/${employees}`)).body.data;
     expect(rows.map((r: { _id: string }) => r._id)).toEqual([id]);
   });

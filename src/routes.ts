@@ -31,6 +31,7 @@ r.get("/departments/options", requireAuth, handle(departmentOptionsHandler));
 
 // ---- users / roles / departments (admin) ----
 r.get("/users", adminOnly, handle(admin.getUsers));
+r.get("/users/app-access", adminOnly, handle(admin.getAppAccessOptions));
 r.post("/users", adminOnly, handle(admin.createUserHandler));
 r.put("/users/:id", adminOnly, handle(admin.updateUserHandler));
 r.delete("/users/:id", adminOnly, handle(admin.deleteUserHandler));

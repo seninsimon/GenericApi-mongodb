@@ -1,4 +1,5 @@
 import { can, recordScope, isAdmin } from "../auth/access.js";
+import { ownLinkIds } from "../auth/ownership.js";
 import { getRecordsByIds } from "../repo/recordRepo.js";
 import { existingDepartmentIds, getUserOptionsByIds } from "../repo/userRepo.js";
 import { UPLOAD_URL_PREFIX } from "../storage.js";
@@ -146,7 +147,7 @@ export function checkChoices(
     if (user && !user.role.isAdmin) {
       const before = new Set(([] as unknown[]).concat(previous[column.name] ?? []));
       const chosen = ([] as unknown[]).concat(values[column.name] ?? []).filter((v) => !before.has(v));
-      const locked = (column.options ?? []).find((o) => o.roles?.length && chosen.includes(o.label) && !o.roles.includes(user.role._id));
+      const locked = (column.options ?? []).find((o) => o.roles?.length && chosen.includes(o.label) && !o.roles.some((id) => user.roleIds.includes(id)));
       if (locked) {
         errors[column.name] = `Only some roles can set ${column.label || column.name} to "${locked.label}" (it's an approval step)`;
         continue;
@@ -217,6 +218,9 @@ export async function checkRelations(
       continue;
     }
     if (!isAdmin(user) && !can(user, refSchema, "view")) {
+      // your own entry (your People directory record) needs no access to its table
+      const own = await ownLinkIds(schema, column.name, user);
+      if (ids.every((id) => own.has(id))) continue;
       errors[column.name] = `${label}: you don't have access to "${refSchema.tableName}"`;
       continue;
     }

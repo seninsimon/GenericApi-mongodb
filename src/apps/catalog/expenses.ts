@@ -3,7 +3,7 @@ import type { AppBlueprint } from "../types.js";
 
 export const expenses: AppBlueprint = {
   key: "expenses",
-  version: 2, // 2: approval steps
+  version: 3, // 2: approval steps; 3: managers hear about new claims
   name: "Expense claims",
   description: "Staff claim what they spent, with a receipt; managers approve and reimburse. Staff see only their own claims.",
   icon: "IconReceiptRefund",
@@ -31,6 +31,12 @@ export const expenses: AppBlueprint = {
     },
   ],
   automations: [
+    {
+      table: "claims",
+      name: "Tell the managers about new claims",
+      trigger: { when: "created" },
+      actions: [{ do: "notify", who: "$managers", message: "New expense claim to approve" }],
+    },
     {
       table: "claims",
       name: "Tell the claimant when it's approved",

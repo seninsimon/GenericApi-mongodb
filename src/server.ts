@@ -1,12 +1,21 @@
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { pool } from "./db/pool.js";
+import { loadDraftedApps } from "./apps/draft.js";
+import { ensureAppRoles, upgradeInstalledApps } from "./apps/installer.js";
 import { startWorker } from "./jobs/worker.js";
 import { logger } from "./lib/logger.js";
 import { prepare } from "./startup.js";
 
 try {
   const stopListener = await prepare();
+  // apps installed before apps had their own roles get them (once)
+  await loadDraftedApps();
+  const added = await ensureAppRoles();
+  if (added) logger.info({ apps: added }, "gave installed apps their own roles");
+  // installed apps whose blueprint got newer: their new and corrected automations
+  const upgraded = await upgradeInstalledApps();
+  if (upgraded.length) logger.info({ apps: upgraded }, "updated installed apps");
   // in docker a separate "worker" service runs jobs (RUN_WORKER=false here)
   const stopWorker = env.runWorker ? await startWorker() : null;
 

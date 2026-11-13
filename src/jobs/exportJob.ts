@@ -49,7 +49,7 @@ export async function runExport(job: Job) {
   if (!can(user, schema, "view")) throw new Error("You no longer have access to this table");
 
   // "Visible to" only when the table is shared with several departments (as in the list)
-  const withDepartment = schema.departments.length > 1;
+  const withDepartment = schema.byDepartment && schema.departments.length > 1;
   // "Engineering; Design": the record's first department, then the shared ones
   const names = new Map(schema.departments.map((d) => [d._id, d.name]));
   const visibleTo = (r: { departmentId: string | null; sharedDepartmentIds: string[]; departmentName?: string | null }) =>

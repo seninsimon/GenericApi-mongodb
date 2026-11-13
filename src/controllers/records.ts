@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { ALL_RECORDS, allowedDepartments, can, isAdmin, recordScope } from "../auth/access.js";
+import { checkNotApprovingOwn, keepItYours, ownLinkIds, selfRecords } from "../auth/ownership.js";
 import { withTransaction } from "../db/pool.js";
 import { HttpError, intParam, param, toIdList } from "../lib/http.js";
 import { currentUser } from "../middleware/auth.js";
@@ -18,6 +19,7 @@ import {
   type ListOptions,
   type RecordDepartments,
 } from "../repo/recordRepo.js";
+import { fillFromUsers } from "../schema/fromUser.js";
 import { parseFilters } from "../schema/filters.js";
 import { columnByNameOrLabel, FILE_COLUMN_TYPES, isSortable, pickDisplayField } from "../schema/columns.js";
 import { getSchema } from "../schema/schemaRepo.js";
@@ -90,7 +92,8 @@ export function resolveDepartments(
   if (raw === undefined) {
     if (!creating) return undefined;
     if (allowed.length === 1) return oneDepartment(allowed[0]);
-    if (allowed.length === 0 && isAdmin(user)) return oneDepartment(null);
+    // tables everyone can see don't need one (it's noted when it's clear)
+    if (!schema.byDepartment || (allowed.length === 0 && isAdmin(user))) return oneDepartment(null);
     throw departmentError("Please choose a department for this record");
   }
   const list = raw === null || raw === "" ? [] : Array.isArray(raw) ? raw : [raw];
@@ -102,12 +105,12 @@ export function resolveDepartments(
     if (before.length === ids.length && ids.every((id) => before.includes(id))) return undefined;
   }
   if (!ids.length) {
-    if (isAdmin(user)) return oneDepartment(null);
+    if (isAdmin(user) || !schema.byDepartment) return oneDepartment(null);
     throw departmentError("Please choose a department for this record");
   }
   const tableDepartments = new Set(schema.departments.map((d) => d._id));
   if (ids.some((id) => !tableDepartments.has(id))) throw departmentError("You can't assign records to that department");
-  if (!isAdmin(user) && !ids.some((id) => allowed.includes(id))) {
+  if (!isAdmin(user) && schema.byDepartment && !ids.some((id) => allowed.includes(id))) {
     throw departmentError(
       allowed.length ? "Keep at least one of your own departments, or you couldn't see this record anymore" : "You can't assign records to that department"
     );
@@ -168,10 +171,14 @@ export async function listHandler(req: Request, res: Response) {
     const ids = new Set(result.rows.flatMap((r) => fileUrls(r.data[column.name])));
     if (!ids.size) continue;
     const refSchema = await getSchema(column.ref);
-    if (!refSchema || !can(user, refSchema, "view")) continue;
+    if (!refSchema) continue;
+    // without access to the linked table, only your own entry is named
+    const ownOnly = !can(user, refSchema, "view");
+    const own = ownOnly ? await ownLinkIds(schema, column.name, user) : null;
+    if (own && !own.size) continue;
 
     const display = pickDisplayField(refSchema, column.displayField);
-    const found = await getRecordsByIds(refSchema.tableName, [...ids], recordScope(user, refSchema));
+    const found = await getRecordsByIds(refSchema.tableName, own ? [...own] : [...ids], own ? ALL_RECORDS : recordScope(user, refSchema));
     relationLabels.set(
       column.name,
       new Map(found.map((r) => [r._id, String((display === "_id" ? r._id : r.data[display]) || r._id)]))
@@ -195,7 +202,8 @@ export async function listHandler(req: Request, res: Response) {
   // record may be visible to several, or come from another department);
   // admins also while some records are admins-only
   const withDepartment =
-    schema.departments.length > 1 || (isAdmin(user) && (await countUnassigned(schema.tableName)) > 0);
+    schema.byDepartment &&
+    (schema.departments.length > 1 || (isAdmin(user) && (await countUnassigned(schema.tableName)) > 0));
   const relationLabel = (labels: Map<string, string> | undefined, id: unknown) =>
     id ? (labels?.get(String(id)) ?? "—") : "";
 
@@ -253,11 +261,23 @@ function resolveSort(schema: TableSchema, raw: unknown): ListOptions["sort"] {
 
 export async function optionsHandler(req: Request, res: Response) {
   const user = currentUser(req);
-  const schema = await loadTable(req, "view");
   const ids =
     typeof req.query.ids === "string" && req.query.ids
       ? [...new Set(req.query.ids.split(",").filter(Boolean))].slice(0, 200)
       : undefined;
+  // Without access to the table, only the records that are you (your People
+  // directory entry), asked for by id: so your own leave can name you.
+  const target = await getSchema(param(req, "collection"));
+  if (target && ids && !isAdmin(user) && !can(user, target, "view")) {
+    const userColumns = target.columns.filter((c) => c.type === "user").map((c) => c.name);
+    const self = userColumns.length ? await selfRecords({ column: "", table: target.tableName, userColumns }, user._id) : [];
+    const wanted = self.filter((r) => ids.includes(r._id));
+    if (wanted.length) {
+      res.json(wanted.map((r) => ({ value: r._id, label: r.label })));
+      return;
+    }
+  }
+  const schema = await loadTable(req, "view");
 
   res.json(
     await getRecordOptions(schema.tableName, pickDisplayField(schema, String(req.query.displayField ?? "")), {
@@ -340,7 +360,14 @@ export async function createHandler(req: Request, res: Response) {
   const preview = isPreview(req);
 
   const { values, errors } = coerceValues(schema, payload);
+  // "Department" from the picked login's department, when it's empty
+  await fillFromUsers(schema, values);
+  // "own only": the record is theirs (Employee = them, filled in when empty)
+  await keepItYours(schema, values, null, user).catch((e) => {
+    if (!preview) throw e;
+  });
   throwIfErrors({ ...errors, ...(preview ? {} : checkRequired(schema, values)), ...checkChoices(schema, values, {}, user) });
+  if (!preview) await checkNotApprovingOwn(schema, values, {}, user);
   const departments = preview
     ? (() => {
         try {
@@ -400,6 +427,9 @@ export async function updateHandler(req: Request, res: Response) {
     if (!current) throw new HttpError(404, "Record not found");
 
     const newDepartments = resolveDepartments(user, schema, payload, false, current);
+    await fillFromUsers(schema, values, current.data);
+    await keepItYours(schema, values, current.data, user);
+    if (!preview) await checkNotApprovingOwn(schema, values, current.data, user);
     const merged: RecordData = { ...current.data, ...values };
     throwIfErrors({ ...(preview ? {} : checkRequired(schema, merged)), ...checkChoices(schema, values, current.data, user) });
     throwIfErrors(await checkRelations(user, schema, values, current.data));

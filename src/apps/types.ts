@@ -74,4 +74,6 @@ export interface BundleBlueprint {
   description: string;
   icon: string;
   apps: string[];
+  // starter departments, created with it (the admin can rename or drop them)
+  departments?: string[];
 }

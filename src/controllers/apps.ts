@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { APP_BY_KEY, APPS, BUNDLES, fullKey } from "../apps/index.js";
+import { APP_BY_KEY, APPS, BUNDLES, fullKey, launcherApp } from "../apps/index.js";
 import { aiDraftsEnabled, draftWithClaude, fromDraft, loadDraftedApps, registerApp } from "../apps/draft.js";
 import type { AppBlueprint } from "../apps/types.js";
 import { can } from "../auth/access.js";
@@ -132,7 +132,8 @@ export async function dashboardsHandler(req: Request, res: Response) {
       b && bSchema && bColumn
         ? { label: b.label, table: bSchema.tableName, column: bColumn.name, options: (bColumn.options ?? []).map((o) => o.label) }
         : null;
-    if (tiles.length || breakdown) out.push({ app: app.key, name: app.name, icon: app.icon, tiles, breakdown });
+    // launcher: the app page it shows on (an app, or its group, e.g. "company")
+    if (tiles.length || breakdown) out.push({ app: app.key, launcher: launcherApp(app.key)?.key ?? app.key, name: app.name, icon: app.icon, tiles, breakdown });
   }
   res.json(out);
 }

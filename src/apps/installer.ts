@@ -19,7 +19,8 @@ import type { AppBlueprint, ColumnBlueprint, TableBlueprint } from "./types.js";
 //
 //   plan()    works out what installing would do (the preview shows exactly this)
 //   install() does it, in one transaction: tables, links between them, sharing
-//             with departments, the Manager/Staff roles, and sample records
+//             with departments, the app's own roles ("Projects · Manager",
+//             "Projects · Staff"), and sample records
 //
 // A table is recognised by its blueprint key ("projects.tasks"), stored on the
 // table. A later app linking to "people.employees" finds that table even after
@@ -30,6 +31,10 @@ export interface InstallOptions {
   tables?: Record<string, boolean>;
   // share the new tables with these departments
   departmentIds?: string[];
+  // departments to create (or reuse, by name) and share with: an
+  // organization type's starter departments, as the admin edited them.
+  // Not given: the organization type's own list
+  departments?: string[];
   sampleData?: boolean;
   // a table name that's already taken by one of your own tables:
   // "new" (default) = create "tasks_2"; "use" = use your table for it
@@ -60,7 +65,10 @@ export interface InstallPlan {
   tables: PlannedTable[];
   // columns added to tables of other apps ("Stock" on Products)
   extensions: { table: string; label: string; columns: string[] }[];
-  roles: { name: string; action: "create" | "extend"; tables: string[] }[];
+  // the apps' roles: "Projects · Manager" (level "manager"), "Projects · Staff"
+  roles: { name: string; level: string; action: "create" | "extend"; tables: string[] }[];
+  // an organization type's starter departments (exists: one has that name already)
+  departments: { name: string; exists: boolean }[];
   hasSample: boolean;
 }
 
@@ -224,34 +232,202 @@ function columnsFor(app: AppBlueprint, table: TableBlueprint, byKey: Map<string,
   return { kept, dropped };
 }
 
-function planRoles(ctx: Ctx, tables: PlannedTable[], existingRoles: Map<string, { permissions: Record<string, Permissions> }>) {
-  const roles = new Map<string, { name: string; description: string; perms: Record<string, Partial<Permissions>> }>();
-  for (const app of ctx.appsToInstall) {
+// Each app has its own roles, one per role in its blueprint: "Projects ·
+// Manager" (level "manager"), "Projects · Staff". People get them through
+// their app access, so someone can manage HR and be staff in Projects.
+type PlannedRole = {
+  app: string;
+  level: string;
+  name: string;
+  description: string;
+  perms: Record<string, Partial<Permissions>>;
+  action: "create" | "extend";
+};
+const roleKey = (app: string, level: string) => `${app}:${level}`;
+
+function planRoles(
+  apps: AppBlueprint[],
+  tables: Pick<PlannedTable, "key" | "app" | "action" | "tableName">[],
+  existing: Map<string, { _id: string; permissions: Record<string, Permissions> }>
+): PlannedRole[] {
+  const roles: PlannedRole[] = [];
+  for (const app of apps) {
     const appTables = tables.filter((t) => t.app === app.key && t.action !== "skip" && t.tableName);
     for (const role of app.roles ?? []) {
-      const entry = roles.get(role.name) ?? { name: role.name, description: role.description, perms: {} };
-      for (const [key, perms] of Object.entries(role.perms)) {
+      const level = role.name.toLowerCase();
+      const perms: Record<string, Partial<Permissions>> = {};
+      for (const [key, p] of Object.entries(role.perms)) {
         const targets = key === "*" ? appTables : appTables.filter((t) => t.key === fullKey(app, key));
-        for (const t of targets) entry.perms[t.tableName!] = { ...entry.perms[t.tableName!], ...perms };
+        for (const t of targets) perms[t.tableName!] = { ...perms[t.tableName!], ...p };
       }
-      roles.set(role.name, entry);
+      const found = existing.get(roleKey(app.key, level));
+      roles.push({
+        app: app.key,
+        level,
+        name: `${app.name} · ${role.name}`,
+        description: level === "manager" ? `Everything in ${app.name}` : `Everyday work in ${app.name}; personal records only their own`,
+        // an existing role only gains rights on tables it has none for
+        perms: Object.fromEntries(Object.entries(perms).filter(([table]) => !found?.permissions[table])),
+        action: found ? "extend" : "create",
+      });
     }
   }
-  return [...roles.values()].map((r) => {
-    const existing = existingRoles.get(r.name.toLowerCase());
-    // an existing role only gains rights on tables it has none for
-    const perms = Object.fromEntries(Object.entries(r.perms).filter(([table]) => !existing?.permissions[table]));
-    return { ...r, perms, action: (existing ? "extend" : "create") as "create" | "extend" };
-  });
+  return roles;
 }
 
-async function loadRoles(db?: pg.PoolClient) {
-  const { rows } = await query<{ _id: string; name: string; is_admin: boolean; permissions: Record<string, Permissions> }>(
-    `SELECT _id, name, is_admin, permissions FROM roles`,
+async function loadAppRoles(db?: pg.PoolClient) {
+  const { rows } = await query<{ _id: string; app_key: string; app_level: string; permissions: Record<string, Permissions> }>(
+    `SELECT _id, app_key, app_level, permissions FROM roles WHERE app_key IS NOT NULL`,
     [],
     db
   );
-  return new Map(rows.filter((r) => !r.is_admin).map((r) => [r.name.toLowerCase(), r]));
+  return new Map(rows.map((r) => [roleKey(r.app_key, r.app_level), r]));
+}
+
+// Create or extend the planned roles; returns their ids by app and level.
+async function saveAppRoles(roles: PlannedRole[], client: pg.PoolClient) {
+  const ids = new Map<string, string>();
+  const existing = await loadAppRoles(client);
+  for (const role of roles) {
+    const perms = Object.fromEntries(
+      Object.entries(role.perms).map(([t, p]) => [
+        t,
+        { view: Boolean(p.view), create: Boolean(p.create), edit: Boolean(p.edit), delete: Boolean(p.delete), own: Boolean(p.own) },
+      ])
+    );
+    const found = existing.get(roleKey(role.app, role.level));
+    if (found) {
+      // gains rights on new tables, never loses any (permissions on the right win)
+      await query(`UPDATE roles SET permissions = $2::jsonb || permissions, updated_at = now() WHERE _id = $1`, [found._id, JSON.stringify(perms)], client);
+      ids.set(roleKey(role.app, role.level), found._id);
+      continue;
+    }
+    // a role of your own may already have the name
+    let name = role.name;
+    for (let n = 2; (await query(`SELECT 1 FROM roles WHERE lower(name) = lower($1)`, [name], client)).rowCount; n++) name = `${role.name} (${n})`;
+    const { rows } = await query<{ _id: string }>(
+      `INSERT INTO roles (name, description, permissions, app_key, app_level) VALUES ($1, $2, $3::jsonb, $4, $5) RETURNING _id`,
+      [name, role.description, JSON.stringify(perms), role.app, role.level],
+      client
+    );
+    ids.set(roleKey(role.app, role.level), rows[0]._id);
+  }
+  return ids;
+}
+
+// Options only managers may choose ("Approved"): `managerIdFor` gives the
+// role id for a table's app. replace: only that role (a new install); add:
+// that role too (roles added to an app installed before apps had roles).
+async function markApprovals(
+  entries: { key: string; tableName: string }[],
+  managerIdFor: (appKey: string) => string | undefined,
+  mode: "replace" | "add",
+  client: pg.PoolClient,
+  // the table's schema: during an install, the one being built (the new
+  // tables aren't visible outside the transaction yet)
+  schemaOf: (tableName: string) => TableSchema | undefined | Promise<TableSchema | null>
+) {
+  for (const entry of entries) {
+    const bp = tableBlueprint(entry.key);
+    const managerId = managerIdFor(entry.key.split(".")[0]);
+    const schema = await schemaOf(entry.tableName);
+    if (!bp || !managerId || !schema) continue;
+    const columns = schema.columns;
+    let changed = false;
+    for (const c of bp.columns) {
+      const only = c.onlyManagers as string[] | undefined;
+      const column = columns.find((x) => x.name === c.name);
+      if (!only?.length || !column?.options) continue;
+      for (const o of column.options) {
+        if (!only.includes(o.label)) continue;
+        o.roles = mode === "replace" ? [managerId] : [...new Set([...(o.roles ?? []), managerId])];
+        changed = true;
+      }
+    }
+    if (changed) {
+      await query(`UPDATE table_schemas SET columns = $2::jsonb WHERE table_name = $1`, [entry.tableName, JSON.stringify(columns)], client);
+    }
+  }
+}
+
+// Installed apps whose blueprint got newer (its version) get the app's new
+// and corrected automations, once, at start-up:
+//   - an automation the app has that isn't there by name is added;
+//   - one with the same name and trigger (as the app made it) gets the app's
+//     current actions (e.g. "tell the employee" instead of "tell the creator");
+//   - one you changed (another trigger) is left alone.
+// Then the install is marked with the new version.
+// equal JSON values, whatever the order of their keys (Postgres reorders them)
+const sorted = (v: unknown): unknown =>
+  Array.isArray(v)
+    ? v.map(sorted)
+    : v && typeof v === "object"
+      ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])]))
+      : v;
+const sameJson = (a: unknown, b: unknown) => JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
+
+export async function upgradeInstalledApps() {
+  const installed = await listInstalled();
+  const schemas = await getAllSchemas();
+  const upgraded: string[] = [];
+  for (const row of installed) {
+    const app = APP_BY_KEY.get(row.key);
+    if (!app || row.version >= app.version) continue;
+    await withTransaction(async (client) => {
+      for (const a of app.automations ?? []) {
+        const schema = schemas.find((s) => s.blueprintKey === fullKey(app, a.table));
+        if (!schema) continue; // the table was left out, or removed
+        let clean;
+        try {
+          clean = await normalizeAutomation(schema, a);
+        } catch {
+          continue; // a column it needs was removed or renamed
+        }
+        const { rows } = await query<{ _id: string; trigger: unknown }>(
+          `SELECT _id, trigger FROM automations WHERE table_name = $1 AND name = $2`,
+          [schema.tableName, clean.name],
+          client
+        );
+        if (!rows.length) {
+          await query(
+            `INSERT INTO automations (table_name, name, trigger, actions) VALUES ($1, $2, $3::jsonb, $4::jsonb)`,
+            [schema.tableName, clean.name, JSON.stringify(clean.trigger), JSON.stringify(clean.actions)],
+            client
+          );
+        } else if (sameJson(rows[0].trigger, clean.trigger)) {
+          await query(`UPDATE automations SET actions = $2::jsonb, updated_at = now() WHERE _id = $1`, [rows[0]._id, JSON.stringify(clean.actions)], client);
+        }
+      }
+      await query(`UPDATE installed_apps SET version = $2 WHERE key = $1`, [app.key, app.version], client);
+    });
+    upgraded.push(app.key);
+  }
+  return upgraded;
+}
+
+// Apps installed before apps had their own roles get them once (at start-up),
+// with the same rights the shared Manager/Staff roles gave them. Approval
+// steps then also accept the app's Manager role. Safe to run again.
+export async function ensureAppRoles() {
+  const installed = await listInstalled();
+  if (!installed.length) return 0;
+  const existing = await loadAppRoles();
+  const schemas = await getAllSchemas();
+  let added = 0;
+  for (const row of installed) {
+    const app = APP_BY_KEY.get(row.key);
+    if (!app?.roles?.length || app.roles.every((r) => existing.has(roleKey(app.key, r.name.toLowerCase())))) continue;
+    const tables = schemas
+      .filter((s) => s.appKey === app.key && s.blueprintKey)
+      .map((s) => ({ key: s.blueprintKey!, app: app.key, action: "create" as const, tableName: s.tableName }));
+    await withTransaction(async (client) => {
+      const ids = await saveAppRoles(planRoles([app], tables, existing), client);
+      await markApprovals(tables, (appKey) => ids.get(roleKey(appKey, "manager")), "add", client, getSchema);
+    });
+    added++;
+  }
+  if (added) await invalidateSchemas();
+  return added;
 }
 
 async function buildPlan(keys: string[], options: InstallOptions, db?: pg.PoolClient) {
@@ -265,7 +441,7 @@ async function buildPlan(keys: string[], options: InstallOptions, db?: pg.PoolCl
     schemas: await getAllSchemas(),
   };
   const tables = planTables(ctx, options);
-  const roles = planRoles(ctx, tables, await loadRoles(db));
+  const roles = planRoles(ctx.appsToInstall, tables, await loadAppRoles(db));
   const plan: InstallPlan = {
     apps: resolved.map((r) => ({
       key: r.app.key,
@@ -274,7 +450,7 @@ async function buildPlan(keys: string[], options: InstallOptions, db?: pg.PoolCl
       pulledIn: r.pulledIn && !requested.includes(r.app.key),
     })),
     tables,
-    roles: roles.map((r) => ({ name: r.name, action: r.action, tables: Object.keys(r.perms) })),
+    roles: roles.map((r) => ({ name: r.name, level: r.level, action: r.action, tables: Object.keys(r.perms) })),
     extensions: ctx.appsToInstall.flatMap((app) =>
       Object.entries(app.extend ?? {})
         .map(([key, columns]) => {
@@ -285,9 +461,38 @@ async function buildPlan(keys: string[], options: InstallOptions, db?: pg.PoolCl
         })
         .filter((e): e is { table: string; label: string; columns: string[] } => e !== null)
     ),
+    departments: await suggestedDepartments(keys, db),
     hasSample: ctx.appsToInstall.some((a) => a.sample),
   };
   return { plan, ctx, roles };
+}
+
+// The starter departments of the organization types being installed.
+async function suggestedDepartments(keys: string[], db?: pg.PoolClient) {
+  const names = [...new Set(keys.flatMap((k) => BUNDLE_BY_KEY.get(k)?.departments ?? []))];
+  if (!names.length) return [];
+  const { rows } = await query<{ name: string }>(`SELECT name FROM departments`, [], db);
+  const taken = new Set(rows.map((r) => r.name.trim().toLowerCase()));
+  return names.map((name) => ({ name, exists: taken.has(name.toLowerCase()) }));
+}
+
+// Create the named departments (or find them by name); returns their ids.
+async function ensureDepartments(names: string[], client: pg.PoolClient) {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of names.slice(0, 30)) {
+    const name = String(raw ?? "").trim().slice(0, 100);
+    if (!name || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    const found = await query<{ _id: string }>(`SELECT _id FROM departments WHERE lower(name) = lower($1) LIMIT 1`, [name], client);
+    if (found.rows[0]) {
+      ids.push(found.rows[0]._id);
+      continue;
+    }
+    const made = await query<{ _id: string }>(`INSERT INTO departments (name) VALUES ($1) RETURNING _id`, [name], client);
+    ids.push(made.rows[0]._id);
+  }
+  return ids;
 }
 
 export async function plan(keys: string[], options: InstallOptions = {}): Promise<InstallPlan> {
@@ -300,7 +505,7 @@ const isoDate = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 export async function install(keys: string[], options: InstallOptions, user: CurrentUser) {
-  const departmentIds = [...new Set(options.departmentIds ?? [])];
+  let departmentIds = [...new Set(options.departmentIds ?? [])];
   const created: TableSchema[] = [];
   const touched: string[] = [];
 
@@ -314,6 +519,10 @@ export async function install(keys: string[], options: InstallOptions, user: Cur
       const { rows } = await query<{ _id: string }>(`SELECT _id FROM departments WHERE _id = ANY($1::text[])`, [departmentIds], client);
       if (rows.length !== departmentIds.length) throw new HttpError(400, "A chosen department doesn't exist");
     }
+    // an organization type's starter departments (as edited in the preview)
+    const starter = Array.isArray(options.departments) ? options.departments : p.departments.map((d) => d.name);
+    const starterIds = await ensureDepartments(starter, client);
+    departmentIds = [...new Set([...departmentIds, ...starterIds])];
 
     const byKey = new Map(p.tables.map((t) => [t.key, t]));
     const schemaFor = new Map<string, TableSchema>(); // table name -> schema being written
@@ -351,8 +560,9 @@ export async function install(keys: string[], options: InstallOptions, user: Cur
         checkFormulas(columns);
         await query(
           // clock_timestamp(): tables keep the app's order in lists and the sidebar
-          `INSERT INTO table_schemas (table_name, columns, show_in_menu, blueprint_key, app_key, created_at)
-           VALUES ($1, $2::jsonb, $5, $3, $4, clock_timestamp())`,
+          // by_department false: everyone whose role can use the app sees its records
+          `INSERT INTO table_schemas (table_name, columns, show_in_menu, blueprint_key, app_key, by_department, created_at)
+           VALUES ($1, $2::jsonb, $5, $3, $4, false, clock_timestamp())`,
           [name, JSON.stringify(columns), entry.key, entry.app, tableBlueprint(entry.key)!.showInMenu !== false],
           client
         );
@@ -364,7 +574,7 @@ export async function install(keys: string[], options: InstallOptions, user: Cur
             client
           );
         }
-        const schema = { tableName: name, columns, departments: [], blueprintKey: entry.key, appKey: entry.app } as unknown as TableSchema;
+        const schema = { tableName: name, columns, departments: [], byDepartment: false, blueprintKey: entry.key, appKey: entry.app } as unknown as TableSchema;
         schemaFor.set(name, schema);
         created.push(schema);
       } else {
@@ -428,51 +638,16 @@ export async function install(keys: string[], options: InstallOptions, user: Cur
       }
     }
 
-    // 2. roles: Manager and Staff, created or extended (never narrowed)
-    const existingRoles = await loadRoles(client);
-    for (const role of roles) {
-      if (!Object.keys(role.perms).length && role.action === "extend") continue;
-      const perms = Object.fromEntries(
-        Object.entries(role.perms).map(([t, p]) => [
-          t,
-          { view: Boolean(p.view), create: Boolean(p.create), edit: Boolean(p.edit), delete: Boolean(p.delete), own: Boolean(p.own) },
-        ])
-      );
-      const existing = existingRoles.get(role.name.toLowerCase());
-      if (existing) {
-        await query(`UPDATE roles SET permissions = permissions || $2::jsonb, updated_at = now() WHERE _id = $1`, [
-          existing._id,
-          JSON.stringify(perms),
-        ], client);
-      } else {
-        await query(`INSERT INTO roles (name, description, permissions) VALUES ($1, $2, $3::jsonb)`, [
-          role.name,
-          role.description,
-          JSON.stringify(perms),
-        ], client);
-      }
-    }
-
-    // 2b. approval steps: options only the Manager role may choose
-    const managerId = (await loadRoles(client)).get("manager")?._id;
-    if (managerId) {
-      for (const entry of p.tables) {
-        if (entry.action !== "create" || !entry.tableName) continue;
-        const bp = tableBlueprint(entry.key)!;
-        const schema = schemaFor.get(entry.tableName)!;
-        let changed = false;
-        for (const c of bp.columns) {
-          const only = c.onlyManagers as string[] | undefined;
-          const column = schema.columns.find((x) => x.name === c.name);
-          if (!only?.length || !column?.options) continue;
-          for (const o of column.options) if (only.includes(o.label)) o.roles = [managerId];
-          changed = true;
-        }
-        if (changed) {
-          await query(`UPDATE table_schemas SET columns = $2::jsonb WHERE table_name = $1`, [entry.tableName, JSON.stringify(schema.columns)], client);
-        }
-      }
-    }
+    // 2. the apps' own roles ("Projects · Manager"), and approval steps:
+    // options only the app's Manager role may choose
+    const roleIds = await saveAppRoles(roles, client);
+    await markApprovals(
+      p.tables.filter((t) => t.action === "create" && t.tableName).map((t) => ({ key: t.key, tableName: t.tableName! })),
+      (appKey) => roleIds.get(roleKey(appKey, "manager")),
+      "replace",
+      client,
+      (name) => schemaFor.get(name)
+    );
 
     // 2c. the apps' automations, on tables made now
     for (const app of ctx.appsToInstall) {
@@ -480,7 +655,8 @@ export async function install(keys: string[], options: InstallOptions, user: Cur
         const entry = byKey.get(fullKey(app, a.table));
         const schema = entry?.action === "create" && entry.tableName ? schemaFor.get(entry.tableName) : undefined;
         if (!schema) continue;
-        const clean = normalizeAutomation(schema, a);
+        // links may point at tables made in this same install
+        const clean = await normalizeAutomation(schema, a, async (name) => schemaFor.get(name) ?? (await getSchema(name)));
         await query(
           `INSERT INTO automations (table_name, name, trigger, actions) VALUES ($1, $2, $3::jsonb, $4::jsonb)`,
           [schema.tableName, clean.name, JSON.stringify(clean.trigger), JSON.stringify(clean.actions)],
@@ -684,6 +860,13 @@ export async function uninstall(key: string) {
   }
   await query(`DELETE FROM installed_apps WHERE key = $1`, [key]);
   await query(`UPDATE table_schemas SET blueprint_key = NULL, app_key = NULL WHERE app_key = $1`, [key]);
+  // its roles go too; anyone whose main role it was becomes a Member
+  await query(
+    `UPDATE users SET role_id = (SELECT _id FROM roles WHERE lower(name) = 'member' LIMIT 1)
+     WHERE role_id IN (SELECT _id FROM roles WHERE app_key = $1)`,
+    [key]
+  );
+  await query(`DELETE FROM roles WHERE app_key = $1`, [key]);
   await invalidateSchemas();
   return { removedTables: tables, removedFiles };
 }

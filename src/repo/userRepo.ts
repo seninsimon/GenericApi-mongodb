@@ -1,16 +1,22 @@
 import { createHash, randomBytes } from "node:crypto";
 import { query, quoteIdent, withTransaction, type Db } from "../db/pool.js";
+import { mergePermissions } from "../auth/mergePermissions.js";
 import type { CurrentUser, PermissionMap } from "../types.js";
 
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
-// user + role + departments
+// user + main role + extra (app) roles + departments
 const USER_SELECT = `
   SELECT u._id, u.username, u.full_name, u.email, u.phone, u.is_active,
          u.last_login_at, u.created_at, u.updated_at,
          r._id AS role_id, r.name AS role_name, r.is_admin, r.permissions,
+         COALESCE((
+           SELECT jsonb_agg(jsonb_build_object('_id', x._id, 'permissions', x.permissions, 'appKey', x.app_key, 'appLevel', x.app_level))
+           FROM user_roles ur JOIN roles x ON x._id = ur.role_id
+           WHERE ur.user_id = u._id AND x._id <> u.role_id
+         ), '[]'::jsonb) AS extra_roles,
          COALESCE((
            SELECT jsonb_agg(jsonb_build_object('_id', d._id, 'name', d.name) ORDER BY d.name)
            FROM user_departments ud JOIN departments d ON d._id = ud.department_id
@@ -34,6 +40,7 @@ type UserRow = {
   role_name: string;
   is_admin: boolean;
   permissions: PermissionMap;
+  extra_roles: { _id: string; permissions: PermissionMap; appKey: string | null; appLevel: string | null }[];
   departments: { _id: string; name: string }[];
 };
 
@@ -47,7 +54,16 @@ const toUser = (row: UserRow): CurrentUser => ({
   lastLoginAt: row.last_login_at,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
-  role: { _id: row.role_id, name: row.role_name, isAdmin: row.is_admin, permissions: row.permissions },
+  role: {
+    _id: row.role_id,
+    name: row.role_name,
+    isAdmin: row.is_admin,
+    permissions: mergePermissions([row.permissions ?? {}, ...(row.extra_roles ?? []).map((x) => x.permissions ?? {})]),
+  },
+  roleIds: [row.role_id, ...(row.extra_roles ?? []).map((x) => x._id)],
+  appRoles: (row.extra_roles ?? [])
+    .filter((x) => x.appKey && x.appLevel)
+    .map((x) => ({ _id: x._id, appKey: x.appKey!, appLevel: x.appLevel! })),
   departments: row.departments,
 });
 
@@ -145,7 +161,20 @@ export interface UserInput {
   roleId?: string;
   isActive?: boolean;
   departmentIds?: string[];
+  // extra roles (app roles); undefined = keep
+  extraRoleIds?: string[];
 }
+
+const setUserRoles = async (db: Db, userId: string, roleIds: string[]) => {
+  await query(`DELETE FROM user_roles WHERE user_id = $1`, [userId], db);
+  if (roleIds.length) {
+    await query(
+      `INSERT INTO user_roles (user_id, role_id) SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING`,
+      [userId, roleIds],
+      db
+    );
+  }
+};
 
 const setUserDepartments = async (db: Db, userId: string, departmentIds: string[]) => {
   await query(`DELETE FROM user_departments WHERE user_id = $1`, [userId], db);
@@ -176,6 +205,7 @@ export async function createUser(data: UserInput & { username: string; passwordH
       client
     );
     await setUserDepartments(client, rows[0]._id, data.departmentIds ?? []);
+    await setUserRoles(client, rows[0]._id, data.extraRoleIds ?? []);
     return rows[0]._id;
   });
   return (await getUserById(id))!;
@@ -205,6 +235,7 @@ export async function updateUser(id: string, data: UserInput) {
       await query(`UPDATE users SET ${sets.join(", ")}, updated_at = now() WHERE _id = $1`, params, client);
     }
     if (data.departmentIds !== undefined) await setUserDepartments(client, id, data.departmentIds);
+    if (data.extraRoleIds !== undefined) await setUserRoles(client, id, data.extraRoleIds);
   });
   return getUserById(id);
 }
@@ -222,6 +253,9 @@ export interface Role {
   description: string;
   isAdmin: boolean;
   permissions: PermissionMap;
+  // set on an app's roles ("Projects · Manager": projects / manager)
+  appKey: string | null;
+  appLevel: string | null;
   userCount: number;
   createdAt: Date;
   updatedAt: Date;
@@ -233,6 +267,8 @@ type RoleRow = {
   description: string;
   is_admin: boolean;
   permissions: PermissionMap;
+  app_key: string | null;
+  app_level: string | null;
   user_count: number;
   created_at: Date;
   updated_at: Date;
@@ -244,13 +280,17 @@ const toRole = (row: RoleRow): Role => ({
   description: row.description,
   isAdmin: row.is_admin,
   permissions: row.permissions,
+  appKey: row.app_key ?? null,
+  appLevel: row.app_level ?? null,
   userCount: row.user_count ?? 0,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
 
 const ROLE_SELECT = `
-  SELECT r.*, (SELECT count(*)::int FROM users u WHERE u.role_id = r._id) AS user_count
+  SELECT r.*,
+    (SELECT count(*)::int FROM users u
+     WHERE u.role_id = r._id OR EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = u._id AND ur.role_id = r._id)) AS user_count
   FROM roles r
 `;
 
@@ -291,7 +331,8 @@ export async function updateRole(id: string, input: { name?: string; description
 }
 
 export async function deleteRole(id: string) {
-  const { rowCount } = await query(`DELETE FROM roles WHERE _id = $1 AND NOT is_admin`, [id]);
+  // an app's roles go with the app
+  const { rowCount } = await query(`DELETE FROM roles WHERE _id = $1 AND NOT is_admin AND app_key IS NULL`, [id]);
   return (rowCount ?? 0) > 0;
 }
 

@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
-import { APP_BY_KEY } from "../apps/index.js";
+import { launcherApp } from "../apps/index.js";
 import { allowedDepartments, can, isAdmin, tablePermissions } from "../auth/access.js";
+import { ownFieldsFor } from "../auth/ownership.js";
 import { HttpError, param, toIdList } from "../lib/http.js";
 import { currentUser } from "../middleware/auth.js";
 import { audit } from "../repo/auditRepo.js";
@@ -24,10 +25,10 @@ import { deleteUploads } from "../storage.js";
 import type { CurrentUser, TableSchema } from "../types.js";
 
 // What the current user may do with a table, added to the schema, and the
-// sidebar group of tables an app made ("Company", "Projects"; null = your own).
+// app it belongs to in the launcher and sidebar ("Company", "Projects"; null = your own).
 const withAccess = (user: CurrentUser, schema: TableSchema) => ({
   ...schema,
-  group: schema.appKey ? (APP_BY_KEY.get(schema.appKey)?.group ?? APP_BY_KEY.get(schema.appKey)?.name ?? null) : null,
+  app: launcherApp(schema.appKey),
   permissions: tablePermissions(user, schema),
   allowedDepartments: allowedDepartments(user, schema),
 });
@@ -52,6 +53,9 @@ export async function getTableSchema(req: Request, res: Response) {
 
   const result: Record<string, unknown> = withAccess(user, schema);
   if (isAdmin(user)) result.unassignedCount = await countUnassigned(schema.tableName);
+  // "own only": the fields that make a record theirs, locked to them in the form
+  const own = await ownFieldsFor(schema, user);
+  if (own.length) result.ownFields = own;
   res.json(result);
 }
 
@@ -83,7 +87,7 @@ export async function deleteTableHandler(req: Request, res: Response) {
   res.json({ message: `Table "${schema.tableName}" deleted`, deletedFiles: fileUrls.length });
 }
 
-// PUT /schema/:table { showInMenu?, departmentIds? }
+// PUT /schema/:table { showInMenu?, byDepartment?, departmentIds? }
 export async function updateTableSettingsHandler(req: Request, res: Response) {
   const tableName = param(req, "table");
   let departmentIds: string[] | undefined;
@@ -93,12 +97,20 @@ export async function updateTableSettingsHandler(req: Request, res: Response) {
       throw new HttpError(400, "Unknown department selected");
     }
   }
-  const schema = await updateTableSettings(tableName, { showInMenu: req.body?.showInMenu, departmentIds });
+  const schema = await updateTableSettings(tableName, {
+    showInMenu: req.body?.showInMenu,
+    byDepartment: req.body?.byDepartment,
+    departmentIds,
+  });
   await audit(req, {
     action: "settings",
     entity: "table",
     tableName,
-    changes: { showInMenu: schema.showInMenu, departments: schema.departments.map((d) => d.name) },
+    changes: {
+      showInMenu: schema.showInMenu,
+      recordsSeenBy: schema.byDepartment ? "each department" : "everyone with access",
+      departments: schema.departments.map((d) => d.name),
+    },
   });
 
   // A table shared with one department never keeps "admins only" records:

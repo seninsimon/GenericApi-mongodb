@@ -210,6 +210,7 @@ export const normalizeColumn = (input: Partial<Column> & Record<string, unknown>
   };
   if (typeof input.label === "string") column.label = input.label.trim().slice(0, 100);
   if (typeof input.displayField === "string") column.displayField = input.displayField;
+  if (column.type === "department" && typeof input.fromUser === "string" && input.fromUser) column.fromUser = input.fromUser;
   if (column.type === "relation" && !column.multiple && input.inline) column.inline = true;
   if (column.type === "rollup") {
     column.rollup = strict ? normalizeRollup(input.rollup) : (input.rollup as RollupConfig);

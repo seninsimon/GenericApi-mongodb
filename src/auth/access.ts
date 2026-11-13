@@ -3,11 +3,13 @@ import type { Action, CurrentUser, DepartmentRef, PermissionMap, Permissions, Re
 
 // Access rules for ERP tables and records.
 //
-// A non-admin user can use a table when:
-//   1. their role grants "view" on it, and
-//   2. at least one of their departments is assigned to the table.
-// Inside that table they only see/change records whose department is one of
-// (their departments ∩ the table's departments). If their role has "own only"
+// A non-admin user can use a table when their role grants "view" on it.
+// What they see depends on the table's "who sees the records":
+//   - everyone (byDepartment false): all its records;
+//   - each department (byDepartment true): they also need one of the
+//     table's departments, and see only records visible to one of
+//     (their departments ∩ the table's departments).
+// If their role has "own only"
 // for the table, they instead see just their own records (created by them, or
 // picked in a "User" column), whichever of the table's departments those are
 // in: e.g. HR keeps employee records "visible to HR", and each person still
@@ -52,13 +54,14 @@ export const recordScope = (user: CurrentUser, schema: TableSchema): RecordScope
       owner: { userId: user._id, userColumns: schema.columns.filter((c) => c.type === "user").map((c) => c.name), linkColumns },
     };
   }
+  if (!schema.byDepartment) return ALL_RECORDS;
   return { departmentIds: allowedDepartments(user, schema).map((d) => d._id), owner: null };
 };
 
 export const tablePermissions = (user: CurrentUser, schema: TableSchema | null | undefined): Permissions => {
   if (!schema) return NONE;
   if (isAdmin(user)) return ALL;
-  if (!allowedDepartments(user, schema).length) return NONE;
+  if (schema.byDepartment && !allowedDepartments(user, schema).length) return NONE;
 
   const granted = user.role.permissions?.[schema.tableName];
   if (!granted?.view) return NONE;

@@ -1,10 +1,13 @@
 import type { Request, Response } from "express";
+import { accessOf, accessOptions, rolesForAccess } from "../apps/access.js";
+import { addToDirectory } from "../apps/directory.js";
 import { normalizePermissions } from "../auth/access.js";
 import { hashPassword, validateNewPassword } from "../auth/password.js";
 import { isUniqueViolation } from "../db/pool.js";
 import { cleanText, HttpError, isValidEmail, param, toIdList, USERNAME_PATTERN } from "../lib/http.js";
 import { currentUser } from "../middleware/auth.js";
 import { audit } from "../repo/auditRepo.js";
+import type { CurrentUser } from "../types.js";
 import {
   countActiveAdmins,
   createDepartment,
@@ -72,18 +75,45 @@ async function readUserInput(body: Record<string, unknown>, creating: boolean) {
 }
 
 // fields worth recording in the audit log (never the password hash)
-const auditableUser = (input: UserInput & { role?: Role }) => {
-  const { passwordHash, role, ...rest } = input;
-  return { ...rest, ...(role ? { role: role.name } : {}), ...(passwordHash ? { passwordReset: true } : {}) };
+const auditableUser = (input: UserInput & { role?: Role }, appAccess?: unknown) => {
+  const { passwordHash, role, extraRoleIds: _roles, ...rest } = input;
+  return {
+    ...rest,
+    ...(role ? { role: role.name } : {}),
+    ...(appAccess !== undefined ? { appAccess } : {}),
+    ...(passwordHash ? { passwordReset: true } : {}),
+  };
 };
 
-export const getUsers = async (_req: Request, res: Response) => res.json(await listUsers());
+// a person as the API returns them: with their app access ({ projects: "manager" })
+const withAccess = <T extends Pick<CurrentUser, "appRoles">>(user: T) => ({ ...user, appAccess: accessOf(user) });
+
+export const getUsers = async (_req: Request, res: Response) => res.json((await listUsers()).map(withAccess));
+
+// GET /users/app-access: the apps a person can be given access to, and their levels
+export const getAppAccessOptions = async (_req: Request, res: Response) => res.json(await accessOptions());
 
 export async function createUserHandler(req: Request, res: Response) {
-  const input = await readUserInput(req.body ?? {}, true);
+  const body = req.body ?? {};
+  const input = await readUserInput(body, true);
+  if (body.appAccess !== undefined) input.extraRoleIds = await rolesForAccess([], body.appAccess);
   const user = await createUser(input as Parameters<typeof createUser>[0]).catch(conflict("A user with this username"));
-  await audit(req, { action: "create", entity: "user", recordId: user._id, changes: auditableUser(input) });
-  res.status(201).json({ message: "User created", user });
+  await audit(req, { action: "create", entity: "user", recordId: user._id, changes: auditableUser(input, body.appAccess) });
+  // "Add person": their entry in the People directory too, linked to the login
+  let directory: { table: string; id: string } | null = null;
+  if (body.addToDirectory === true) {
+    directory = await addToDirectory(user, currentUser(req));
+    if (directory) {
+      await audit(req, {
+        action: "create",
+        entity: "record",
+        tableName: directory.table,
+        recordId: directory.id,
+        changes: { account: { to: user.fullName || user.username } },
+      });
+    }
+  }
+  res.status(201).json({ message: "User created", user: withAccess(user), directory });
 }
 
 export async function updateUserHandler(req: Request, res: Response) {
@@ -93,6 +123,7 @@ export async function updateUserHandler(req: Request, res: Response) {
   if (!existing) throw new HttpError(404, "User not found");
 
   const input = await readUserInput(req.body ?? {}, false);
+  if (req.body?.appAccess !== undefined) input.extraRoleIds = await rolesForAccess(existing.roleIds.slice(1), req.body.appAccess);
   const isSelf = id === me._id;
   const willBeAdmin = input.role ? input.role.isAdmin : existing.role.isAdmin;
   const willBeActive = input.isActive ?? existing.isActive;
@@ -109,8 +140,8 @@ export async function updateUserHandler(req: Request, res: Response) {
   if (input.passwordHash || input.isActive === false) {
     await deleteUserSessions(id, isSelf ? req.sessionToken : undefined);
   }
-  await audit(req, { action: "update", entity: "user", recordId: id, changes: auditableUser(input) });
-  res.json({ message: "User updated", user });
+  await audit(req, { action: "update", entity: "user", recordId: id, changes: auditableUser(input, req.body?.appAccess) });
+  res.json({ message: "User updated", user: user && withAccess(user) });
 }
 
 export async function deleteUserHandler(req: Request, res: Response) {
@@ -166,6 +197,7 @@ export async function deleteRoleHandler(req: Request, res: Response) {
   const existing = await getRoleById(param(req, "id"));
   if (!existing) throw new HttpError(404, "Role not found");
   if (existing.isAdmin) throw new HttpError(400, "The Admin role can't be deleted");
+  if (existing.appKey) throw new HttpError(400, "This role comes with an app: it's removed together with the app");
   if (existing.userCount > 0) {
     throw new HttpError(409, `This role is assigned to ${existing.userCount} user(s). Assign them another role first.`);
   }

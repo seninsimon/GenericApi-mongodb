@@ -60,6 +60,9 @@ export interface Column {
   ref: string | null;
   multiple: boolean;
   displayField?: string;
+  // "department" columns only: filled in from this User column's person when
+  // that's picked and the department is empty (see schema/fromUser.ts)
+  fromUser?: string;
   // "relation" columns only: these records are edited inside the linked
   // record's form (an invoice's lines); see controllers/lineItems.ts
   inline?: boolean;
@@ -91,6 +94,10 @@ export interface TableSchema {
   columns: Column[];
   showInMenu: boolean;
   departments: DepartmentRef[];
+  // "Who sees the records": true = each department only its own (and a
+  // person needs one of the table's departments); false = everyone whose
+  // role can use the table
+  byDepartment: boolean;
   // set on tables an app created: "projects.tasks", and the app ("projects")
   blueprintKey: string | null;
   appKey: string | null;
@@ -132,7 +139,12 @@ export interface CurrentUser {
   lastLoginAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  // the main role, with the rights of all their roles added up (mergePermissions)
   role: { _id: string; name: string; isAdmin: boolean; permissions: PermissionMap };
+  // every role they have: the main one first, then the extra (app) roles
+  roleIds: string[];
+  // their app roles: "Projects · Manager" = { appKey: "projects", appLevel: "manager" }
+  appRoles: { _id: string; appKey: string; appLevel: string }[];
   departments: DepartmentRef[];
 }
 

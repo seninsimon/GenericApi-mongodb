@@ -4,6 +4,7 @@ import { query } from "../db/pool.js";
 import { HttpError } from "../lib/http.js";
 import { getUserOptionsByIds, userLabel } from "../repo/userRepo.js";
 import type { Column, CurrentUser, RecordData, TableSchema } from "../types.js";
+import { getSchema } from "./schemaRepo.js";
 import { pickDisplayField } from "./columns.js";
 import { ME, TODAY } from "./columns.js";
 import { applyFormulas } from "./formula.js";
@@ -27,12 +28,52 @@ export interface Automation {
   enabled: boolean;
 }
 
+// who to tell:
+//   "$creator"         the person who created the record
+//   "$managers"        people who can edit every record of the table (its managers)
+//   "assignee"         the person in a User column
+//   "employee.account" the person in a User column of the linked record
+//                      (the Employee's Login account)
 const CREATOR = "$creator";
+const MANAGERS = "$managers";
 const label = (c: Column) => c.label || c.name;
+
+// a table by name: normally the saved one; an install passes the tables it's making
+type SchemaOf = (name: string) => Promise<Pick<TableSchema, "tableName" | "columns"> | null | undefined> | Pick<TableSchema, "tableName" | "columns"> | null | undefined;
+
+// "employee.account" -> the link and the User column of the linked table, when valid
+const throughLink = async (schema: TableSchema, who: string, schemaOf: SchemaOf = getSchema) => {
+  const [link, userColumn] = who.split(".");
+  const column = schema.columns.find((c) => c.name === link && c.type === "relation" && c.ref);
+  if (!column || !userColumn) return null;
+  const target = await schemaOf(column.ref!);
+  return target?.columns.some((c) => c.name === userColumn && c.type === "user") ? { link, table: target.tableName, userColumn } : null;
+};
+
+// People who can edit every record of the table (not just their own): its
+// managers. With none yet, the admins, so requests never go unseen.
+async function managersOf(tableName: string, client: pg.PoolClient) {
+  const { rows } = await query<{ _id: string }>(
+    `SELECT DISTINCT u._id FROM users u
+     JOIN roles r ON r._id = u.role_id OR r._id IN (SELECT role_id FROM user_roles WHERE user_id = u._id)
+     WHERE u.is_active
+       AND (r.permissions -> $1 ->> 'edit')::boolean IS TRUE
+       AND COALESCE((r.permissions -> $1 ->> 'own')::boolean, false) IS FALSE`,
+    [tableName],
+    client
+  );
+  if (rows.length) return rows.map((r) => r._id);
+  const { rows: admins } = await query<{ _id: string }>(
+    `SELECT u._id FROM users u JOIN roles r ON r._id = u.role_id WHERE r.is_admin AND u.is_active`,
+    [],
+    client
+  );
+  return admins.map((r) => r._id);
+}
 
 /* ---------------- checking automations (admin) ---------------- */
 
-export function normalizeAutomation(schema: TableSchema, input: Record<string, unknown>) {
+export async function normalizeAutomation(schema: TableSchema, input: Record<string, unknown>, schemaOf: SchemaOf = getSchema) {
   const t = (input.trigger ?? {}) as Record<string, unknown>;
   let trigger: Trigger;
   if (t.when === "created") trigger = { when: "created" };
@@ -51,7 +92,14 @@ export function normalizeAutomation(schema: TableSchema, input: Record<string, u
   const raw = Array.isArray(input.actions) ? input.actions : [];
   if (!raw.length) throw new HttpError(400, "Add at least one thing to do");
   if (raw.length > 10) throw new HttpError(400, "At most 10 things to do");
-  const actions: Action[] = raw.map((a: Record<string, unknown>) => {
+  const actions: Action[] = [];
+  for (const a of raw as Record<string, unknown>[]) actions.push(await normalizeAction(schema, a, schemaOf));
+  const name = typeof input.name === "string" ? input.name.trim().slice(0, 100) : "";
+  return { name, trigger, actions, enabled: input.enabled !== false };
+}
+
+async function normalizeAction(schema: TableSchema, a: Record<string, unknown>, schemaOf: SchemaOf): Promise<Action> {
+  {
     if (a?.do === "set") {
       const column = schema.columns.find((c) => c.name === a.column);
       if (!column || ["formula", "rollup", "autonumber"].includes(column.type)) throw new HttpError(400, "Choose a field to set");
@@ -60,16 +108,17 @@ export function normalizeAutomation(schema: TableSchema, input: Record<string, u
     }
     if (a?.do === "notify") {
       const who = String(a.who ?? "");
-      if (who !== CREATOR && !schema.columns.some((c) => c.name === who && c.type === "user")) {
-        throw new HttpError(400, "Choose who to tell");
-      }
+      const ok =
+        who === CREATOR ||
+        who === MANAGERS ||
+        schema.columns.some((c) => c.name === who && c.type === "user") ||
+        (who.includes(".") && (await throughLink(schema, who, schemaOf)) !== null);
+      if (!ok) throw new HttpError(400, "Choose who to tell");
       const message = typeof a.message === "string" ? a.message.trim().slice(0, 300) : "";
       return { do: "notify", who, ...(message ? { message } : {}) };
     }
     throw new HttpError(400, "Unknown action");
-  });
-  const name = typeof input.name === "string" ? input.name.trim().slice(0, 100) : "";
-  return { name, trigger, actions, enabled: input.enabled !== false };
+  }
 }
 
 export async function listAutomations(tableName: string, db?: pg.PoolClient) {
@@ -154,7 +203,7 @@ export async function afterSave(
         const v = action.value === TODAY ? today() : action.value === ME ? (column.multiple ? [actor._id] : actor._id) : action.value;
         patch[column.name] = v;
       } else {
-        const people = action.who === CREATOR ? idsIn(createdBy) : idsIn(after[action.who]);
+        const people = await recipients(schema, action.who, after, createdBy, client);
         const change =
           a.trigger.when === "changed"
             ? `${label(schema.columns.find((c) => c.name === (a.trigger as { column: string }).column)!)} is now ${String(after[a.trigger.column] ?? "empty")}`
@@ -173,6 +222,22 @@ export async function afterSave(
     await query(`UPDATE ${dataTable(schema.tableName)} SET data = data || $2::jsonb, updated_at = now() WHERE _id = $1`, [recordId, JSON.stringify(patch)], client);
     await applyFormulas(schema, [recordId], client);
   }
+}
+
+// The people an automation tells (see the "who" kinds above).
+async function recipients(schema: TableSchema, who: string, after: RecordData, createdBy: string | null, client: pg.PoolClient) {
+  if (who === CREATOR) return idsIn(createdBy);
+  if (who === MANAGERS) return managersOf(schema.tableName, client);
+  if (!who.includes(".")) return idsIn(after[who]);
+  const path = await throughLink(schema, who);
+  const linked = idsIn(after[path?.link ?? ""]);
+  if (!path || !linked.length) return [];
+  const { rows } = await query<{ v: unknown }>(
+    `SELECT t.data -> $2 AS v FROM ${dataTable(path.table)} t WHERE t._id = ANY($1::text[])`,
+    [linked, path.userColumn],
+    client
+  );
+  return rows.flatMap((r) => idsIn(r.v));
 }
 
 // names for notification lists

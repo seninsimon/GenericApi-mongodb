@@ -3,7 +3,7 @@ import type { AppBlueprint } from "../types.js";
 
 export const hr: AppBlueprint = {
   key: "hr",
-  version: 2, // 2: approval steps
+  version: 3, // 2: approval steps; 3: managers hear about new requests, the employee about decisions
   name: "HR & leave",
   description: "Leave requests with approval, attendance and the holiday calendar. Staff see only their own.",
   icon: "IconUsers",
@@ -52,15 +52,22 @@ export const hr: AppBlueprint = {
   automations: [
     {
       table: "leave_requests",
+      name: "Tell HR about new leave requests",
+      trigger: { when: "created" },
+      actions: [{ do: "notify", who: "$managers", message: "New leave request to approve" }],
+    },
+    // the employee (their login), also when HR entered the request for them
+    {
+      table: "leave_requests",
       name: "Tell the person when their leave is approved",
       trigger: { when: "changed", column: "status", to: "Approved" },
-      actions: [{ do: "notify", who: "$creator", message: "Your leave request was approved" }],
+      actions: [{ do: "notify", who: "employee.account", message: "Your leave request was approved" }],
     },
     {
       table: "leave_requests",
       name: "Tell the person when their leave is rejected",
       trigger: { when: "changed", column: "status", to: "Rejected" },
-      actions: [{ do: "notify", who: "$creator", message: "Your leave request was rejected" }],
+      actions: [{ do: "notify", who: "employee.account", message: "Your leave request was rejected" }],
     },
   ],
   dashboard: {

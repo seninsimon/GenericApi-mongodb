@@ -7,7 +7,7 @@ export const people: AppBlueprint = {
   key: "people",
   version: 1,
   name: "People directory",
-  description: "Everyone who works here, with their team and login. HR, leave and payroll build on it.",
+  description: "Everyone who works here, with their department and login. HR, leave and payroll build on it.",
   icon: "IconAddressBook",
   group: "Company",
   tables: [
@@ -15,13 +15,14 @@ export const people: AppBlueprint = {
       key: "employees",
       name: "employees",
       label: "Employees",
-      description: "Name, team, job title and contact details",
+      description: "Name, department, job title and contact details",
       optional: false,
       columns: [
         text("full_name", "Name", { required: true, indexed: true }),
         // links HR records to the person's login ("my leave", "my payslips")
         user("account", "Login account"),
-        dept("team", "Team"),
+        // filled in from the login's department when a login is picked
+        dept("team", "Department", { fromUser: "account" }),
         text("job_title", "Job title", { indexed: true }),
         text("email", "Email"),
         text("phone", "Phone"),

@@ -66,7 +66,7 @@ export async function listAutomationsHandler(req: Request, res: Response) {
 
 export async function createAutomationHandler(req: Request, res: Response) {
   const schema = await tableOf(req);
-  const a = normalizeAutomation(schema, req.body ?? {});
+  const a = await normalizeAutomation(schema, req.body ?? {});
   const { rows } = await query(
     `INSERT INTO automations (table_name, name, trigger, actions, enabled) VALUES ($1, $2, $3::jsonb, $4::jsonb, $5) RETURNING *`,
     [schema.tableName, a.name, JSON.stringify(a.trigger), JSON.stringify(a.actions), a.enabled]
@@ -77,7 +77,7 @@ export async function createAutomationHandler(req: Request, res: Response) {
 
 export async function updateAutomationHandler(req: Request, res: Response) {
   const schema = await tableOf(req);
-  const a = normalizeAutomation(schema, req.body ?? {});
+  const a = await normalizeAutomation(schema, req.body ?? {});
   const { rows } = await query(
     `UPDATE automations SET name = $3, trigger = $4::jsonb, actions = $5::jsonb, enabled = $6, updated_at = now()
      WHERE _id = $1 AND table_name = $2 RETURNING *`,

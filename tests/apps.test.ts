@@ -89,7 +89,9 @@ describe("App catalog", () => {
     for (const app of APPS) {
       for (const a of app.automations ?? []) {
         const columns = columnsByKey.get(fullKey(app, a.table))!;
-        expect(() => normalizeAutomation({ tableName: a.table, columns } as never, a), `${app.key}: ${a.name}`).not.toThrow();
+        // links in the catalog name tables by key ("people.employees")
+        const schemaOf = (ref: string) => ({ tableName: ref, columns: columnsByKey.get(ref.includes(".") ? ref : fullKey(app, ref)) ?? [] });
+        await expect(normalizeAutomation({ tableName: a.table, columns } as never, a, schemaOf as never), `${app.key}: ${a.name}`).resolves.toBeTruthy();
       }
     }
     for (const bundle of BUNDLES) for (const key of bundle.apps) expect(keys.has(key), `${bundle.key}: ${key}`).toBe(true);
@@ -135,7 +137,14 @@ describe("Installing apps", async () => {
     const leave = plan.tables.find((t: { key: string }) => t.key === "hr.leave_requests");
     expect(leave).toMatchObject({ action: "create", tableName: "leave_requests" });
     expect(leave.links).toEqual([expect.objectContaining({ to: "people.employees", toLabel: "Employees" })]);
-    expect(plan.roles.map((r: { name: string }) => r.name).sort()).toEqual(["Manager", "Staff"]);
+    // each app brings its own roles
+    expect(plan.roles.map((r: { name: string }) => r.name).sort()).toEqual([
+      "HR & leave · Manager",
+      "HR & leave · Staff",
+      "People directory · Manager",
+      "People directory · Staff",
+    ]);
+    expect(plan.roles.find((r: { name: string }) => r.name === "HR & leave · Staff").level).toBe("staff");
   });
 
   it("leaves out optional tables and the links to them", async () => {
@@ -169,8 +178,12 @@ describe("Installing apps", async () => {
     expect(web).toMatchObject({ hours: 12, open_tasks: 3 });
 
     const roles = (await admin.get("/api/roles")).body;
-    expect(roles.find((r: { name: string }) => r.name === "Staff").permissions.time_logs).toMatchObject({ view: true, own: true });
-    expect(roles.find((r: { name: string }) => r.name === "Manager").permissions.tasks).toMatchObject({ delete: true });
+    const staff = roles.find((r: { name: string }) => r.name === "Projects · Staff");
+    expect(staff).toMatchObject({ appKey: "projects", appLevel: "staff" });
+    expect(staff.permissions.time_logs).toMatchObject({ view: true, own: true });
+    expect(roles.find((r: { name: string }) => r.name === "Projects · Manager").permissions.tasks).toMatchObject({ delete: true });
+    // an app's roles go with the app, not on their own
+    expect((await admin.del(`/api/roles/${staff._id}`)).status).toBe(400);
 
     // installing again is refused
     expect((await admin.post("/api/apps/install", { apps: ["projects"] })).status).toBe(400);
@@ -234,10 +247,33 @@ describe("Installing apps", async () => {
     expect(leave.find((l) => l.type === "Earned")?.employee).toBe("You (sample)");
   });
 
+  it("tells the sidebar which app each table belongs to (shared apps as one: Company)", async () => {
+    const tables = (await admin.get("/api/schema").expect(200)).body as { tableName: string; app: { key: string; name: string; icon: string } | null }[];
+    const appOf = (name: string) => tables.find((t) => t.tableName === name)?.app ?? null;
+    expect(appOf("tasks")).toMatchObject({ key: "projects", name: "Projects", icon: "IconChecklist" });
+    // an app's records are seen by everyone whose role can use the app
+    expect((await admin.get("/api/schema/tasks")).body.byDepartment).toBe(false);
+    expect(appOf("leave_requests")).toMatchObject({ key: "hr" });
+    expect(appOf("employees")).toMatchObject({ key: "company", name: "Company", icon: "IconBuildingSkyscraper" });
+    const own = unique("own");
+    await admin.post("/api/schema", { tableName: own, columns: [{ name: "name", label: "Name" }] }).expect(200);
+    expect((await admin.get(`/api/schema/${own}`)).body.app).toBeNull(); // your own tables: "My tables"
+    await admin.del(`/api/schema/${own}`).expect(200);
+    // each app's counts go on its app page
+    const boards = (await admin.get("/api/apps/dashboards")).body as { app: string; launcher: string }[];
+    expect(boards.find((b) => b.app === "projects")?.launcher).toBe("projects");
+  });
+
   it("lets staff see their own HR records through the Employee link", async () => {
-    const staff = (await admin.get("/api/roles")).body.find((r: { name: string }) => r.name === "Staff");
+    // a Member whose rights come from app access: HR staff, Company (the directory) staff
+    const member = (await admin.get("/api/roles")).body.find((r: { name: string }) => r.name === "Member");
     const username = unique("asha").toLowerCase();
-    const user = (await admin.post("/api/users", { username, password: "user-pass-123", roleId: staff._id, departmentIds: [dept._id] })).body.user;
+    const user = (
+      await admin
+        .post("/api/users", { username, password: "user-pass-123", roleId: member._id, appAccess: { hr: "staff", company: "staff" } })
+        .expect(201)
+    ).body.user;
+    expect(user.appAccess).toEqual({ hr: "staff", company: "staff" });
     // Asha's employee record gets her login
     const asha = (await records("employees")).find((e) => e.full_name === "Asha Menon")!;
     await admin.put(`/api/table/employees/${asha._id}`, { account: user._id }).expect(200);
@@ -252,6 +288,15 @@ describe("Installing apps", async () => {
     const approved = await client.post("/api/table/leave_requests", { employee: asha._id, from: "2026-12-05", to: "2026-12-05", status: "Approved" });
     expect(approved.status).toBe(400);
     expect(approved.body.errors.status).toMatch(/approval step/);
+
+    // HR's manager can approve, without being a manager anywhere else
+    const bossName = unique("boss").toLowerCase();
+    await admin
+      .post("/api/users", { username: bossName, password: "user-pass-123", roleId: member._id, appAccess: { hr: "manager", company: "staff" } })
+      .expect(201);
+    const boss = await login(bossName, "user-pass-123");
+    await boss.post("/api/table/leave_requests", { employee: asha._id, from: "2026-12-07", to: "2026-12-07", status: "Approved" }).expect(200);
+    expect((await boss.get("/api/table/tasks")).status).toBe(404); // no Projects access at all
   });
 
   it("names a clashing table, or uses yours when asked", async () => {
@@ -286,6 +331,23 @@ describe("Installing apps", async () => {
     const res = await admin.del("/api/apps/projects/sample").expect(200);
     expect(res.body.removed).toBeGreaterThanOrEqual(before);
     expect((await records("tasks")).map((t) => t.title)).toEqual(["A real task"]);
+  });
+
+  it("an organization type brings departments, which the admin can rename or leave out", async () => {
+    await reset();
+    const suggested = (await admin.post("/api/apps/plan", { apps: ["org-clinic"] }).expect(200)).body.departments;
+    expect(suggested.map((d: { name: string }) => d.name)).toEqual(["Front desk", "Doctors", "Nursing", "Pharmacy", "Accounts"]);
+
+    const reception = unique("Reception"); // "Front desk", renamed
+    await admin.post("/api/apps/install", { apps: ["org-clinic"], options: { departments: [reception, "Doctors"] } }).expect(200);
+    const names = (await admin.get("/api/departments")).body.map((d: { name: string }) => d.name);
+    expect(names).toEqual(expect.arrayContaining([reception, "Doctors"]));
+    expect(names).not.toContain("Nursing");
+    expect((await schema("patients")).departments.map((d: { name: string }) => d.name)).toEqual(expect.arrayContaining([reception, "Doctors"]));
+    // next time, the existing ones are reused
+    const again = (await admin.post("/api/apps/plan", { apps: ["org-clinic"] })).body.departments;
+    expect(again.find((d: { name: string }) => d.name === "Doctors").exists).toBe(true);
+    await reset();
   });
 
   it("sets up every kind of organization, with samples", async () => {

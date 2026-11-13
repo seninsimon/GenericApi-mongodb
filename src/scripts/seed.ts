@@ -215,7 +215,7 @@ const TABLES: { name: string; departments: string[]; columns: Col[] }[] = [
     text("email", "Email"), text("phone", "Phone"), text("city", "City", { indexed: true }), date("last_contacted", "Last contacted"), bool("newsletter", "Newsletter"),
   ] },
   { name: "employees", departments: ["All staff"], columns: [
-    text("full_name", "Name", { required: true, indexed: true }), { name: "team", label: "Team", type: "department" }, text("job_title", "Job title", { indexed: true }),
+    text("full_name", "Name", { required: true, indexed: true }), { name: "team", label: "Department", type: "department" }, text("job_title", "Job title", { indexed: true }),
     text("email", "Email"), text("phone", "Phone"), text("location", "Location", { indexed: true }), date("joined_on", "Joined on"), bool("active", "Active"),
     { name: "photo", label: "Photo", type: "image" },
   ] },

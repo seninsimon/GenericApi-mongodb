@@ -202,13 +202,13 @@ export async function runImport(job: Job) {
         const unknown = names.filter((n) => !byName.has(n.toLowerCase()));
         if (unknown.length) {
           messages.push(`Visible to: "${unknown.join(", ")}" isn't a department of this table`);
-        } else if (!isAdmin(user) && !ids.some((id) => allowedIds.has(id!))) {
+        } else if (!isAdmin(user) && schema.byDepartment && !ids.some((id) => allowedIds.has(id!))) {
           messages.push(`Visible to: "${row.department}" must include one of your departments`);
         } else {
           departmentId = ids[0];
           sharedDepartmentIds = ids.slice(1) as string[];
         }
-      } else if (departmentId === undefined) {
+      } else if (departmentId === undefined && schema.byDepartment) {
         messages.push("Visible to: choose a department (add a \"Visible to\" column, or pick one when importing)");
       }
 
