@@ -1,10 +1,8 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { generateJson } from "../ai/generate.js";
 import { query } from "../db/pool.js";
 import { HttpError } from "../lib/http.js";
-import { logger } from "../lib/logger.js";
 import { normalizeColumn } from "../schema/columns.js";
 import { checkFormulas } from "../schema/formula.js";
 import type { Column } from "../types.js";
@@ -12,14 +10,13 @@ import { autonum, bool, choice, date, file, formula, image, link, longText, mana
 import { APP_BY_KEY } from "./index.js";
 import type { AppBlueprint, ColumnBlueprint } from "./types.js";
 
-// "We're a 12-person dental clinic with two branches" -> Claude drafts an app
+// "We're a 12-person dental clinic with two branches" -> the AI chosen in
+// Administration → AI drafts an app
 // (tables, columns, links) as structured JSON. The draft is only data: it is
 // turned into a normal blueprint here, checked like every catalog app, and
 // shown in the same preview before anything is created.
 
-const MODEL = "claude-opus-5-5";
-
-// What Claude fills in. Every field is required (empty when not used) so the
+// What the AI fills in. Every field is required (empty when not used) so the
 // structured output stays simple.
 const DraftColumn = z.object({
   name: z.string().describe("snake_case identifier, unique in the table"),
@@ -58,40 +55,8 @@ Rules:
 - Use formula only for simple arithmetic between number columns of the same table ({qty} * {rate}), or DAYS({to}, {from}) + 1 for dates.
 - Use plain words a non-technical office worker understands. Never invent features the ERP doesn't have (no reminders, no email).`;
 
-export const aiDraftsEnabled = () => Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
-
-export async function draftWithClaude(description: string): Promise<Draft> {
-  if (!aiDraftsEnabled()) {
-    throw new HttpError(503, "Drafting with AI isn't set up: add ANTHROPIC_API_KEY to the server's settings (.env).");
-  }
-  const client = new Anthropic();
-  try {
-    const response = await client.beta.messages.parse({
-      model: MODEL,
-      max_tokens: 16000,
-      // a declined request is re-run on Anthropic's recommended fallback model
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      output_config: { effort: "medium", format: betaZodOutputFormat(DraftSchema) },
-      system: SYSTEM,
-      messages: [{ role: "user", content: `Our organization: ${description}` }],
-    });
-    if (response.stop_reason === "refusal") throw new HttpError(422, "The AI couldn't draft this one. Try describing the organization differently.");
-    if (response.stop_reason === "max_tokens" || !response.parsed_output) {
-      throw new HttpError(502, "The AI's draft came back incomplete. Try again, or describe a smaller part of the organization.");
-    }
-    return response.parsed_output;
-  } catch (error) {
-    if (error instanceof HttpError) throw error;
-    if (error instanceof Anthropic.AuthenticationError) throw new HttpError(503, "The AI key in the server's settings was refused.");
-    if (error instanceof Anthropic.RateLimitError) throw new HttpError(429, "The AI is busy right now. Try again in a minute.");
-    if (error instanceof Anthropic.APIError) {
-      logger.error({ status: error.status, message: error.message }, "AI draft failed");
-      throw new HttpError(502, "The AI service didn't answer. Try again in a minute.");
-    }
-    throw error;
-  }
-}
+export const draftWithAi = (description: string): Promise<Draft> =>
+  generateJson({ system: SYSTEM, prompt: `Our organization: ${description}`, schema: DraftSchema, name: "app_draft" });
 
 /* ---------------- draft -> blueprint ---------------- */
 

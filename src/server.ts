@@ -3,6 +3,7 @@ import { env } from "./config/env.js";
 import { pool } from "./db/pool.js";
 import { loadDraftedApps } from "./apps/draft.js";
 import { ensureAppRoles, upgradeInstalledApps } from "./apps/installer.js";
+import { importAiSettingsFromEnv } from "./ai/settings.js";
 import { importMailSettingsFromEnv } from "./controllers/email.js";
 import { startWorker } from "./jobs/worker.js";
 import { logger } from "./lib/logger.js";
@@ -22,6 +23,8 @@ try {
   if (upgraded.length) logger.info({ apps: upgraded }, "updated installed apps");
   // email settings put in .env fill Administration → Email once
   await importMailSettingsFromEnv();
+  // and an ANTHROPIC_API_KEY fills Administration → AI once
+  await importAiSettingsFromEnv();
   // in docker a separate "worker" service runs jobs (RUN_WORKER=false here)
   const stopWorker = env.runWorker ? await startWorker() : null;
 

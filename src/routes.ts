@@ -8,6 +8,7 @@ import * as jobs from "./controllers/jobs.js";
 import * as records from "./controllers/records.js";
 import * as apps from "./controllers/apps.js";
 import * as email from "./controllers/email.js";
+import * as ai from "./controllers/ai.js";
 import * as chat from "./controllers/chat.js";
 import * as comments from "./controllers/comments.js";
 import * as notifications from "./controllers/notifications.js";
@@ -96,6 +97,11 @@ r.delete("/chat/:channel/membership", requireAuth, handle(chat.leaveGroup));
 r.get("/email", adminOnly, handle(email.getEmailHandler));
 r.put("/email", adminOnly, handle(email.saveEmailHandler));
 r.post("/email/test", adminOnly, handle(email.testEmailHandler));
+
+// AI: which provider drafts apps, and its key (admin)
+r.get("/ai", adminOnly, handle(ai.getAiHandler));
+r.put("/ai", adminOnly, handle(ai.saveAiHandler));
+r.post("/ai/test", adminOnly, handle(ai.testAiHandler));
 
 // apps (Projects, HR, ...): catalog, preview, install, remove
 r.get("/apps", adminOnly, handle(apps.listAppsHandler));
