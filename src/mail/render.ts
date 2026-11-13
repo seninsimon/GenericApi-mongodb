@@ -5,6 +5,7 @@ import { pickDisplayField } from "../schema/columns.js";
 import { getSchema } from "../schema/schemaRepo.js";
 import type { Column, RecordData, TableSchema } from "../types.js";
 import { getMailSettings } from "./settings.js";
+import { brandName } from "../branding.js";
 
 // What emails look like: short, plain, readable on a phone. Every email has a
 // plain-text and an HTML version.
@@ -29,7 +30,7 @@ export async function renderEmail(parts: {
   footer?: string;
 }) {
   const profile = await link("/profile");
-  const footer = parts.footer ?? `You get this because it concerns you in Zenin ERP. Change how often you get emails in My profile${profile ? `: ${profile}` : "."}`;
+  const footer = parts.footer ?? `You get this because it concerns you in ${await brandName()}. Change how often you get emails in My profile${profile ? `: ${profile}` : "."}`;
 
   const text = [
     parts.intro,

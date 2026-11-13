@@ -13,6 +13,7 @@ import { mailEnabled } from "./mailer.js";
 import { queueEmail } from "./outbox.js";
 import { link, recordLink, renderEmail, type Section } from "./render.js";
 import { getMailSettings } from "./settings.js";
+import { brandName } from "../branding.js";
 
 // The morning summary: once a day, at the hour set in Administration → Email
 // (in its time zone), one email per person with what needs them:
@@ -144,6 +145,7 @@ export async function runMorningSummary(now = new Date()): Promise<number> {
       client
     );
     const home = await link("/");
+    const brand = await brandName();
     for (const p of people) {
       const lists = sections.get(p._id)!;
       const count = lists.reduce((n, s) => n + s.lines.length, 0);
@@ -151,7 +153,7 @@ export async function runMorningSummary(now = new Date()): Promise<number> {
       const { text, html } = await renderEmail({
         intro: `Good morning, ${first}. Here's what needs you today.`,
         sections: lists,
-        button: { label: "Open Zenin ERP", href: home },
+        button: { label: `Open ${brand}`, href: home },
       });
       await queueEmail(
         { userId: p._id, to: p.email, kind: "summary", subject: `Your day, ${longDate(local.date)}: ${count} ${count === 1 ? "thing" : "things"}`, text, html },

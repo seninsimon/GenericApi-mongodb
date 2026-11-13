@@ -6,6 +6,7 @@ import type { RecordData } from "../types.js";
 import { mailEnabled } from "./mailer.js";
 import { queueEmail } from "./outbox.js";
 import { recordDetails, recordLink, renderEmail } from "./render.js";
+import { brandName } from "../branding.js";
 
 // Bell notifications that also go by email. Per person ("Email me" in My
 // profile): now = an email right away; daily = in the morning summary;
@@ -45,7 +46,7 @@ export async function emailNotifications(
   const { text, html } = await renderEmail({
     intro: n.body ? `${n.title}\n${n.body}` : n.title,
     details,
-    button: { label: "Open in Zenin ERP", href },
+    button: { label: `Open in ${await brandName()}`, href },
   });
   for (const p of now) {
     await queueEmail({ userId: p._id, to: p.email, kind: "notification", subject: n.title, text, html }, client);

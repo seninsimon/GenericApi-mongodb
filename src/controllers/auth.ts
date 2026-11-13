@@ -1,3 +1,4 @@
+import { imageUpload } from "../branding.js";
 import { linkOwner, sendPasswordLink, usePasswordLink } from "../auth/passwordLinks.js";
 import { query } from "../db/pool.js";
 import { mailEnabled } from "../mail/mailer.js";
@@ -56,8 +57,10 @@ export const me = (req: Request, res: Response) => res.json({ user: currentUser(
 
 export async function updateProfile(req: Request, res: Response) {
   const user = currentUser(req);
-  const { fullName, email, phone, emailPref } = req.body ?? {};
-  const update: { fullName?: string; email?: string; phone?: string; emailPref?: "now" | "daily" | "never" } = {};
+  const { fullName, email, phone, emailPref, avatarUrl } = req.body ?? {};
+  const update: { fullName?: string; email?: string; phone?: string; emailPref?: "now" | "daily" | "never"; avatarUrl?: string } = {};
+  // a profile picture: an uploaded image, or "" for initials
+  if (avatarUrl !== undefined) update.avatarUrl = imageUpload(avatarUrl, "The picture");
   if (emailPref !== undefined) {
     if (!["now", "daily", "never"].includes(emailPref)) throw new HttpError(400, "Choose how often to get emails");
     update.emailPref = emailPref;
@@ -71,6 +74,8 @@ export async function updateProfile(req: Request, res: Response) {
   }
 
   const updated = await updateUser(user._id, update);
+  // the old picture file is left in storage: the address sent could be any
+  // upload (a record's attachment, say), so it's never deleted from here
   await audit(req, { action: "update", entity: "user", recordId: user._id, changes: update });
   res.json({ message: "Profile updated", user: updated });
 }

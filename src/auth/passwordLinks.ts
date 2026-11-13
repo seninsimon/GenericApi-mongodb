@@ -7,6 +7,7 @@ import { link, renderEmail } from "../mail/render.js";
 import { deleteUserSessions } from "../repo/userRepo.js";
 import type { CurrentUser } from "../types.js";
 import { hashPassword, validateNewPassword } from "./password.js";
+import { brandName } from "../branding.js";
 
 // "Set your password" links, sent by email:
 //   invite: a new person's welcome email (valid 3 days)
@@ -41,17 +42,18 @@ export async function sendPasswordLink(person: Pick<CurrentUser, "_id" | "userna
     db
   );
   const href = `${base}?token=${token}`;
+  const brand = await brandName();
   const name = (person.fullName || person.username).split(/\s+/)[0];
   const { text, html } =
     purpose === "invite"
       ? await renderEmail({
-          intro: `Hi ${name}, you have an account in Zenin ERP. Choose a password to start.`,
+          intro: `Hi ${name}, you have an account in ${brand}. Choose a password to start.`,
           details: [{ label: "Your username", value: person.username }],
           button: { label: "Set my password", href },
           footer: "The link works once, for 3 days. If it has expired, use \"Forgot password?\" on the sign-in page.",
         })
       : await renderEmail({
-          intro: `Hi ${name}, someone asked to reset your Zenin ERP password. If it was you, choose a new one.`,
+          intro: `Hi ${name}, someone asked to reset your ${brand} password. If it was you, choose a new one.`,
           details: [{ label: "Your username", value: person.username }],
           button: { label: "Choose a new password", href },
           footer: "The link works once, for 1 hour. If you didn't ask for this, ignore this email: your password stays as it is.",
@@ -61,7 +63,7 @@ export async function sendPasswordLink(person: Pick<CurrentUser, "_id" | "userna
       userId: person._id,
       to: person.email,
       kind: "account",
-      subject: purpose === "invite" ? "Welcome to Zenin ERP: set your password" : "Reset your Zenin ERP password",
+      subject: purpose === "invite" ? `Welcome to ${brand}: set your password` : `Reset your ${brand} password`,
       text,
       html,
     },

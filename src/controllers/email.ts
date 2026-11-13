@@ -8,6 +8,7 @@ import { link, renderEmail } from "../mail/render.js";
 import { getMailSettings, publicSettings, saveMailSettings } from "../mail/settings.js";
 import { currentUser } from "../middleware/auth.js";
 import { audit } from "../repo/auditRepo.js";
+import { brandName } from "../branding.js";
 
 // Administration → Email (admins only).
 
@@ -29,16 +30,17 @@ export async function testEmailHandler(req: Request, res: Response) {
   const me = currentUser(req);
   if (!me.email) throw new HttpError(400, "Add your email address in My profile first");
   if (!(await mailEnabled())) throw new HttpError(400, "Save the email settings first");
+  const brand = await brandName();
   const { text, html } = await renderEmail({
-    intro: "It works! Zenin ERP can send email.",
+    intro: `It works! ${brand} can send email.`,
     details: [
       { label: "Sent by", value: me.fullName || me.username },
       { label: "Links go to", value: (await getMailSettings()).appUrl || "(not set)" },
     ],
-    button: { label: "Open Zenin ERP", href: await link("/") },
+    button: { label: `Open ${brand}`, href: await link("/") },
     footer: "A test email from Administration → Email.",
   });
-  const id = await queueEmail({ userId: me._id, to: me.email, kind: "test", subject: "Test email from Zenin ERP", text, html });
+  const id = await queueEmail({ userId: me._id, to: me.email, kind: "test", subject: `Test email from ${brand}`, text, html });
   await processOutbox({ onlyId: id });
   const { rows } = await query<{ status: string; last_error: string | null }>(`SELECT status, last_error FROM email_outbox WHERE _id = $1`, [id]);
   if (rows[0]?.status !== "sent") {

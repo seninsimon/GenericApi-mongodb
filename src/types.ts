@@ -138,6 +138,8 @@ export interface CurrentUser {
   isActive: boolean;
   // "Email me": now (right away), daily (in the morning summary) or never
   emailPref: "now" | "daily" | "never";
+  // profile picture ("/uploads/<key>"); "" = initials
+  avatarUrl: string;
   lastLoginAt: Date | null;
   createdAt: Date;
   updatedAt: Date;

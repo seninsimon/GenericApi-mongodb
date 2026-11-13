@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { generateJson } from "../ai/generate.js";
+import type { Who } from "../ai/usage.js";
 import { query } from "../db/pool.js";
 import { HttpError } from "../lib/http.js";
 import { normalizeColumn } from "../schema/columns.js";
@@ -55,8 +56,8 @@ Rules:
 - Use formula only for simple arithmetic between number columns of the same table ({qty} * {rate}), or DAYS({to}, {from}) + 1 for dates.
 - Use plain words a non-technical office worker understands. Never invent features the ERP doesn't have (no reminders, no email).`;
 
-export const draftWithAi = (description: string): Promise<Draft> =>
-  generateJson({ system: SYSTEM, prompt: `Our organization: ${description}`, schema: DraftSchema, name: "app_draft" });
+export const draftWithAi = (description: string, who: Who): Promise<Draft> =>
+  generateJson("draftApps", who, { system: SYSTEM, prompt: `Our organization: ${description}`, schema: DraftSchema, name: "app_draft" });
 
 /* ---------------- draft -> blueprint ---------------- */
 

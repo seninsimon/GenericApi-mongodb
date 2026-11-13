@@ -20,6 +20,7 @@ const args = new Set(process.argv.slice(2));
 
 // Everything this app creates (and nothing else in the database).
 const SYSTEM_TABLES = [
+  "ai_usage",
   "audit_log",
   "jobs",
   "login_attempts",

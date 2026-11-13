@@ -9,6 +9,7 @@ import * as records from "./controllers/records.js";
 import * as apps from "./controllers/apps.js";
 import * as email from "./controllers/email.js";
 import * as ai from "./controllers/ai.js";
+import * as branding from "./controllers/branding.js";
 import * as chat from "./controllers/chat.js";
 import * as comments from "./controllers/comments.js";
 import * as notifications from "./controllers/notifications.js";
@@ -26,6 +27,11 @@ const adminOnly = [requireAuth, requireAdmin];
 // ---- auth ----
 r.post("/auth/login", handle(auth.login));
 r.post("/auth/logout", handle(auth.logout));
+// the organization's name and logo (no sign-in needed to see them)
+r.get("/branding", handle(branding.getBrandingHandler));
+r.get("/branding/logo", handle(branding.logoHandler));
+r.put("/branding", adminOnly, handle(branding.saveBrandingHandler));
+
 r.get("/auth/me", requireAuth, handle(auth.me));
 // live updates for this browser tab (Server-Sent Events)
 r.get("/events", requireAuth, eventsHandler);
@@ -102,6 +108,10 @@ r.post("/email/test", adminOnly, handle(email.testEmailHandler));
 r.get("/ai", adminOnly, handle(ai.getAiHandler));
 r.put("/ai", adminOnly, handle(ai.saveAiHandler));
 r.post("/ai/test", adminOnly, handle(ai.testAiHandler));
+r.get("/ai/usage", adminOnly, handle(ai.aiUsageHandler));
+// Ask Zenin: anyone it's switched on for
+r.get("/ai/assistant", requireAuth, handle(ai.assistantHandler));
+r.post("/ai/ask", requireAuth, handle(ai.askHandler));
 
 // apps (Projects, HR, ...): catalog, preview, install, remove
 r.get("/apps", adminOnly, handle(apps.listAppsHandler));

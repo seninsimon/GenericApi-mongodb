@@ -142,19 +142,11 @@ export async function listHandler(req: Request, res: Response) {
 
   const page = intParam(req.query.page, 1, 1, 1_000_000);
   const limit = intParam(req.query.limit, 10, 1, 500);
-
-  const result = await listRecords(schema, {
-    search: typeof req.query.search === "string" ? req.query.search.slice(0, 200) : "",
-    filters: parseFilters(req.query.filters, schema, user),
-    sort: resolveSort(schema, req.query.sort),
-    order: req.query.order === "asc" ? "asc" : "desc",
-    page,
-    limit,
-    scope: recordScope(user, schema),
-  });
+  const query: ListQuery = { search: req.query.search, filters: req.query.filters, sort: req.query.sort, order: req.query.order, page, limit };
 
   // ?raw=1: stored values (ids, not names), e.g. for editing line items
   if (req.query.raw === "1") {
+    const result = await listRecords(schema, listOptions(user, schema, query));
     res.json({
       data: result.rows.map((row) => ({ ...row.data, _id: row._id, _createdAt: row.createdAt })),
       total: result.total,
@@ -164,6 +156,27 @@ export async function listHandler(req: Request, res: Response) {
     });
     return;
   }
+
+  res.json({ ...(await listForUser(user, schema, query)), page, limit });
+}
+
+export type ListQuery = { search?: unknown; filters?: unknown; sort?: unknown; order?: unknown; page: number; limit: number };
+
+const listOptions = (user: CurrentUser, schema: TableSchema, q: ListQuery): ListOptions => ({
+  search: typeof q.search === "string" ? q.search.slice(0, 200) : "",
+  filters: parseFilters(q.filters, schema, user),
+  sort: resolveSort(schema, q.sort),
+  order: q.order === "asc" ? "asc" : "desc",
+  page: q.page,
+  limit: q.limit,
+  scope: recordScope(user, schema),
+});
+
+// A page of records as this person sees them: only records they may see,
+// links and people shown by name, rich text as plain text. Used by the lists
+// and by Ask Zenin (the assistant searches exactly like the person would).
+export async function listForUser(user: CurrentUser, schema: TableSchema, q: ListQuery) {
+  const result = await listRecords(schema, listOptions(user, schema, q));
 
   // resolve relation ids to display names, only for records the user may see
   const relationLabels = new Map<string, Map<string, string>>();
@@ -246,7 +259,7 @@ export async function listHandler(req: Request, res: Response) {
     return out;
   });
 
-  res.json({ data, total: result.total, totalIsEstimate: result.totalIsEstimate, page, limit });
+  return { data, total: result.total, totalIsEstimate: result.totalIsEstimate };
 }
 
 // ?sort= column name (or label), or _createdAt / _updatedAt

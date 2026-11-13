@@ -1,9 +1,9 @@
 import type { Request, Response } from "express";
 import { APP_BY_KEY, APPS, BUNDLES, fullKey, launcherApp } from "../apps/index.js";
-import { activeAi, PROVIDER_NAMES } from "../ai/settings.js";
+import { activeAi, featureOn, PROVIDER_NAMES } from "../ai/settings.js";
 import { draftWithAi, fromDraft, loadDraftedApps, registerApp } from "../apps/draft.js";
 import type { AppBlueprint } from "../apps/types.js";
-import { can } from "../auth/access.js";
+import { can, isAdmin } from "../auth/access.js";
 import { getAllSchemas } from "../schema/schemaRepo.js";
 import type { TableSchema } from "../types.js";
 import { install, listInstalled, plan, removeSample, uninstall, type InstallOptions } from "../apps/installer.js";
@@ -34,7 +34,7 @@ export async function listAppsHandler(_req: Request, res: Response) {
   await loadDraftedApps();
   const installed = new Map((await listInstalled()).map((a) => [a.key, a]));
   // the catalog, plus apps drafted with AI that are installed
-  const ai = await activeAi();
+  const ai = (await featureOn("draftApps")) ? await activeAi() : null;
   const drafted = [...installed.keys()].filter((k) => !APPS.some((a) => a.key === k)).flatMap((k) => APP_BY_KEY.get(k) ?? []);
   res.json({
     aiDrafts: Boolean(ai),
@@ -147,7 +147,8 @@ export async function draftHandler(req: Request, res: Response) {
   const description = typeof req.body?.description === "string" ? req.body.description.trim() : "";
   if (description.length < 10) throw new HttpError(400, "Describe your organization in a sentence or two");
   if (description.length > 2000) throw new HttpError(400, "Keep the description under 2,000 characters");
-  const draft = await draftWithAi(description);
+  const me = currentUser(req);
+  const draft = await draftWithAi(description, { _id: me._id, isAdmin: isAdmin(me) });
   const app = fromDraft(draft);
   await audit(req, { action: "draft", entity: "app", recordId: app.key, changes: { description, tables: app.tables.map((t) => t.label) } });
   res.json({ draft, app: { key: app.key, name: app.name, description: app.description, tables: app.tables.map((t) => ({ key: t.key, label: t.label, description: t.description })) } });
