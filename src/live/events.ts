@@ -24,7 +24,16 @@ const MAX_PAYLOAD = 7_500; // pg_notify allows 8000 bytes
 
 type ChangeEvent = { type: "change"; table: string; id: string | null; by: string; byName: string; deleted?: boolean };
 type NotificationEvent = { type: "notification"; users: string[]; title: string; table: string | null; id: string | null };
-type LiveEvent = ChangeEvent | NotificationEvent;
+// a record's comments changed (the open record page reloads them)
+type CommentEvent = { type: "comment"; table: string; id: string; by: string };
+// chat: who may hear it is the channel's audience (see chat/channels.ts)
+export type ChatAudience = { kind: string; departmentId: string | null; members: string[] };
+type ChatEvent = { type: "chat"; channel: string; audience: ChatAudience; change: "message" | "update"; by: string; messageId: string | null };
+type LiveEvent = ChangeEvent | NotificationEvent | CommentEvent | ChatEvent;
+
+// may this person hear about this channel?
+const hears = (user: CurrentUser, a: ChatAudience) =>
+  a.kind === "everyone" || (a.kind === "department" ? user.departments.some((d) => d._id === a.departmentId) : a.members.includes(user._id));
 
 const emit = (event: LiveEvent, db?: Db) => query(`SELECT pg_notify($1, $2)`, [LIVE_CHANNEL, JSON.stringify(event)], db);
 
@@ -36,6 +45,13 @@ export const emitChange = (
   db?: Db,
   deleted = false
 ) => emit({ type: "change", table, id, by: by._id, byName: by.fullName || by.username, ...(deleted ? { deleted } : {}) }, db);
+
+// a comment was added, edited or deleted on a record
+export const emitComment = (table: string, id: string, by: string, db?: Db) => emit({ type: "comment", table, id, by }, db);
+
+// a chat message was posted ("message") or edited, deleted or reacted to ("update")
+export const emitChat = (channel: string, audience: ChatAudience, change: "message" | "update", by: string, messageId: string | null, db?: Db) =>
+  emit({ type: "chat", channel, audience, change, by, messageId }, db);
 
 // new bell notifications for these people (sent in groups that fit a pg_notify)
 export async function emitNotification(users: string[], n: { title: string; tableName?: string | null; recordId?: string | null }, db?: Db) {
@@ -57,8 +73,16 @@ function deliver(event: LiveEvent) {
       if (event.users.includes(client.user._id)) send(client, "notification", { title: event.title, table: event.table, id: event.id });
       continue;
     }
+    if (event.type === "chat") {
+      if (hears(client.user, event.audience)) send(client, "chat", { channel: event.channel, change: event.change, by: event.by, messageId: event.messageId });
+      continue;
+    }
     const schema = peekSchema(event.table);
     if (!schema || !can(client.user, schema, "view")) continue;
+    if (event.type === "comment") {
+      send(client, "comment", { table: event.table, id: event.id, by: event.by });
+      continue;
+    }
     send(client, "change", { table: event.table, id: event.id, by: event.by, byName: event.byName, deleted: Boolean(event.deleted) });
   }
 }

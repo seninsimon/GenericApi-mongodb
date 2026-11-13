@@ -8,6 +8,8 @@ import * as jobs from "./controllers/jobs.js";
 import * as records from "./controllers/records.js";
 import * as apps from "./controllers/apps.js";
 import * as email from "./controllers/email.js";
+import * as chat from "./controllers/chat.js";
+import * as comments from "./controllers/comments.js";
 import * as notifications from "./controllers/notifications.js";
 import * as schema from "./controllers/schema.js";
 import { handle } from "./lib/http.js";
@@ -75,6 +77,21 @@ r.delete("/schema/:table/automations/:id", adminOnly, handle(notifications.delet
 r.get("/notifications", requireAuth, handle(notifications.listNotificationsHandler));
 r.post("/notifications/read", requireAuth, handle(notifications.readNotificationsHandler));
 
+// team chat (workspace/CHAT_PLAN.md)
+r.get("/chat", requireAuth, handle(chat.chatOverview));
+r.get("/chat/settings", adminOnly, handle(chat.getChatSettingsHandler));
+r.put("/chat/settings", adminOnly, handle(chat.saveChatSettingsHandler));
+r.get("/chat/search", requireAuth, handle(chat.searchMessages));
+r.post("/chat/dm", requireAuth, handle(chat.openDirect));
+r.post("/chat/groups", requireAuth, handle(chat.createGroup));
+r.put("/chat/messages/:message", requireAuth, handle(chat.editMessage));
+r.delete("/chat/messages/:message", requireAuth, handle(chat.deleteMessage));
+r.post("/chat/messages/:message/reactions", requireAuth, handle(chat.toggleReaction));
+r.get("/chat/:channel/messages", requireAuth, handle(chat.listMessages));
+r.post("/chat/:channel/messages", requireAuth, handle(chat.postMessage));
+r.post("/chat/:channel/read", requireAuth, handle(chat.markRead));
+r.delete("/chat/:channel/membership", requireAuth, handle(chat.leaveGroup));
+
 // email: settings, test, the last emails (admin)
 r.get("/email", adminOnly, handle(email.getEmailHandler));
 r.put("/email", adminOnly, handle(email.saveEmailHandler));
@@ -98,6 +115,11 @@ r.post("/table/:collection/export", requireAuth, handle(jobs.startExportHandler)
 r.post("/table/:collection/bulk-delete", requireAuth, handle(records.bulkDeleteHandler));
 r.post("/table/:collection/import", requireAuth, handle(jobs.startImportHandler));
 r.get("/table/:collection/:id", requireAuth, handle(records.getHandler));
+// comments on a record (anyone who can see it)
+r.get("/table/:collection/:id/comments", requireAuth, handle(comments.listComments));
+r.post("/table/:collection/:id/comments", requireAuth, handle(comments.addComment));
+r.put("/table/:collection/:id/comments/:commentId", requireAuth, handle(comments.editComment));
+r.delete("/table/:collection/:id/comments/:commentId", requireAuth, handle(comments.deleteComment));
 r.put("/table/:collection/:id", requireAuth, handle(records.updateHandler));
 r.delete("/table/:collection/:id", requireAuth, handle(records.deleteHandler));
 
