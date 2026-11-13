@@ -1,0 +1,158 @@
+name: generic-erp
+
+# Defaults are for running on your own machine. For a server, copy
+# .env.example to .env and change every password/secret (see README).
+
+# keep container logs from filling the disk on an always-on server
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-api-env: &api-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-generic_erp}
+  PG_POOL_MAX: ${PG_POOL_MAX:-10}
+  S3_ENDPOINT: http://storage:9000
+  S3_REGION: us-east-1
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-erp-storage}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-erp-storage-secret}
+  S3_BUCKET: ${S3_BUCKET:-erp-uploads}
+  # first admin account, created only when the database has no users yet
+  ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
+  # set to true when the app is served over HTTPS
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  METRICS_TOKEN: ${METRICS_TOKEN:-}
+  # optional: Settings -> Apps -> "Describe your organization" (drafts tables with Claude)
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  # optional, used once: email settings in .env fill Administration -> Email on the
+  # first start (after that they're set in the app). APP_URL comes from deploy.sh.
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASS: ${SMTP_PASS:-}
+  MAIL_FROM: ${MAIL_FROM:-}
+  MAIL_TIMEZONE: ${MAIL_TIMEZONE:-}
+  MAIL_SUMMARY_HOUR: ${MAIL_SUMMARY_HOUR:-}
+  APP_URL: ${APP_URL:-}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-generic_erp}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # only reachable from this machine (5432 is usually taken by a local install)
+      - "127.0.0.1:${DB_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # S3-compatible object storage for uploaded files and job files
+  storage:
+    image: rustfs/rustfs:1.0.4
+    restart: unless-stopped
+    logging: *logging
+    security_opt:
+      - "no-new-privileges:true"
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-erp-storage}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-erp-storage-secret}
+    volumes:
+      - storage:/data
+    ports:
+      - "127.0.0.1:${STORAGE_PORT:-9000}:9000" # S3 API
+      - "127.0.0.1:${STORAGE_CONSOLE_PORT:-9001}:9001" # web console
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  api:
+    build: ./GenericApi-mongodb
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      <<: *api-env
+      PORT: 5000
+      # jobs run in the separate worker service
+      RUN_WORKER: "false"
+    ports:
+      - "127.0.0.1:${API_PORT:-5000}:5000"
+    depends_on:
+      db:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+
+  # background jobs: CSV imports/exports, housekeeping
+  worker:
+    build: ./GenericApi-mongodb
+    restart: unless-stopped
+    logging: *logging
+    command: ["node", "dist/worker.js"]
+    environment:
+      <<: *api-env
+    healthcheck:
+      disable: true
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    build: ./genericERP-react
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # optional: public HTTPS access from anywhere through a Cloudflare Tunnel
+  # (no router changes). Turned on by "./deploy.sh public", which sets
+  # COMPOSE_PROFILES=tunnel and CLOUDFLARE_TUNNEL_TOKEN in .env. See DEPLOYMENT.md.
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.3
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    logging: *logging
+    command: ["tunnel", "--no-autoupdate", "--protocol", "http2", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - web
+
+  # optional, free: the same through a Cloudflare Quick Tunnel. No account or
+  # domain needed, but the public address is random and changes on every
+  # restart (shown by "./deploy.sh status"). Turned on by "./deploy.sh public"
+  # when no token is set (COMPOSE_PROFILES=tunnel-free).
+  tunnel-free:
+    image: cloudflare/cloudflared:2026.10.3
+    profiles: ["tunnel-free"]
+    restart: unless-stopped
+    logging: *logging
+    command: ["tunnel", "--no-autoupdate", "--protocol", "http2", "--url", "http://web:80"]
+    depends_on:
+      - web
+
+volumes:
+  pgdata:
+  storage:
