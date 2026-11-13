@@ -62,7 +62,8 @@ describe("access control", async () => {
 
     const list = await alice.get(`/api/table/${projects}`);
     expect(list.body.data[0]).toMatchObject({ member: "alice row", repo: "hrms" });
-    expect(list.body.data[0]).not.toHaveProperty("_department");
+    // the table has several departments, so "Visible to" shows (records may be shared)
+    expect(list.body.data[0]._departmentIds).toEqual([dev._id]);
 
     expect((await bob.get(`/api/table/${projects}`)).body.total).toBe(0);
     expect((await bob.get(`/api/table/${projects}?search=alice`)).body.total).toBe(0);

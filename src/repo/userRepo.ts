@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { query, withTransaction, type Db } from "../db/pool.js";
+import { query, quoteIdent, withTransaction, type Db } from "../db/pool.js";
 import type { CurrentUser, PermissionMap } from "../types.js";
 
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -372,10 +372,34 @@ export async function updateDepartment(id: string, input: { name?: string; descr
   return getDepartmentById(id);
 }
 
-// Records of this department become unassigned (department_id -> NULL).
+// Records lose this department. Records shared with other departments too
+// stay visible to those; the others become unassigned (admins only).
 export async function deleteDepartment(id: string) {
-  const { rowCount } = await query(`DELETE FROM departments WHERE _id = $1`, [id]);
-  return (rowCount ?? 0) > 0;
+  return withTransaction(async (client) => {
+    const { rows: tables } = await client.query<{ name: string }>(
+      `SELECT c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'erp_data' AND c.relkind = 'r'`
+    );
+    const table = (name: string) => `erp_data.${quoteIdent(name)}`;
+    for (const t of tables) {
+      await client.query(
+        `UPDATE ${table(t.name)} SET shared_department_ids = array_remove(shared_department_ids, $1)
+         WHERE shared_department_ids @> ARRAY[$1]::text[]`,
+        [id]
+      );
+    }
+    // the first department -> NULL (foreign key)
+    const { rowCount } = await client.query(`DELETE FROM departments WHERE _id = $1`, [id]);
+    // the next shared department, if any, becomes the first
+    for (const t of tables) {
+      await client.query(
+        `UPDATE ${table(t.name)}
+         SET department_id = shared_department_ids[1], shared_department_ids = shared_department_ids[2:]
+         WHERE department_id IS NULL AND cardinality(shared_department_ids) > 0`
+      );
+    }
+    return (rowCount ?? 0) > 0;
+  });
 }
 
 /* ---------------- people pickers ("User" columns, "Created by") ---------------- */

@@ -5,13 +5,15 @@ import { filterConditions, type RecordFilter } from "../schema/filters.js";
 import type { Column, RecordData, RecordScope, StoredRecord, TableSchema } from "../types.js";
 
 // SQL condition limiting records to what `scope` allows (see recordScope in
-// auth/access.ts): the user's departments, and with "own only" just the
+// auth/access.ts): records visible to one of the user's departments (the
+// first department or a shared one), and with "own only" just the
 // records they created or are picked in (any "User" column, single or several).
 const scopeCondition = (params: unknown[], scope: RecordScope, alias = "t") => {
   const conditions: string[] = [];
   if (scope.departmentIds != null) {
     params.push(scope.departmentIds);
-    conditions.push(`${alias}.department_id = ANY($${params.length}::text[])`);
+    const mine = `$${params.length}::text[]`;
+    conditions.push(`(${alias}.department_id = ANY(${mine}) OR ${alias}.shared_department_ids && ${mine})`);
   }
   if (scope.owner) {
     params.push(scope.owner.userId);
@@ -39,6 +41,7 @@ type Row = {
   _id: string;
   data: RecordData;
   department_id: string | null;
+  shared_department_ids?: string[] | null;
   created_by?: string | null;
   created_at?: Date;
   updated_at?: Date;
@@ -47,6 +50,7 @@ const toStored = (row: Row): StoredRecord => ({
   _id: row._id,
   data: row.data,
   departmentId: row.department_id,
+  sharedDepartmentIds: row.shared_department_ids ?? [],
   createdBy: row.created_by ?? null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -116,7 +120,7 @@ export async function listRecords(schema: TableSchema, options: ListOptions): Pr
     const { total, totalIsEstimate } = await countRecords(table, where, params);
     const offset = (options.page - 1) * options.limit;
     const { rows } = await query<Row & { department_name: string | null }>(
-      `SELECT t._id, t.data, t.department_id, t.created_by, t.created_at, t.updated_at, d.name AS department_name
+      `SELECT t._id, t.data, t.department_id, t.shared_department_ids, t.created_by, t.created_at, t.updated_at, d.name AS department_name
        FROM ${table} t
        LEFT JOIN departments d ON d._id = t.department_id
        ${where}
@@ -155,7 +159,7 @@ export const getRecordsByIds = (tableName: string, ids: string[], scope: RecordS
     ? orEmpty(async () => {
         const params: unknown[] = [ids];
         const { rows } = await query<Row>(
-          `SELECT t._id, t.data, t.department_id FROM ${dataTable(tableName)} t
+          `SELECT t._id, t.data, t.department_id, t.shared_department_ids FROM ${dataTable(tableName)} t
            WHERE t._id = ANY($1::text[]) AND ${scopeCondition(params, scope)}`,
           params
         );
@@ -218,7 +222,7 @@ export const getRecord = (tableName: string, id: string, scope: RecordScope, db?
   orEmpty(async () => {
     const params: unknown[] = [id];
     const { rows } = await query<Row & { department_name: string | null }>(
-      `SELECT t._id, t.data, t.department_id, t.created_by, t.created_at, t.updated_at, d.name AS department_name
+      `SELECT t._id, t.data, t.department_id, t.shared_department_ids, t.created_by, t.created_at, t.updated_at, d.name AS department_name
        FROM ${dataTable(tableName)} t LEFT JOIN departments d ON d._id = t.department_id
        WHERE t._id = $1 AND ${scopeCondition(params, scope)}`,
       params,
@@ -227,19 +231,26 @@ export const getRecord = (tableName: string, id: string, scope: RecordScope, db?
     return rows[0] ? { ...toStored(rows[0]), departmentName: rows[0].department_name } : null;
   }, null as (StoredRecord & { departmentName: string | null }) | null);
 
+// Who a record is visible to: the first department (null = admins only) and
+// any others. A plain id (or null) means that one department.
+export type RecordDepartments = { departmentId: string | null; sharedDepartmentIds: string[] };
+export const asDepartments = (d: RecordDepartments | string | null): RecordDepartments =>
+  d && typeof d === "object" ? d : { departmentId: d, sharedDepartmentIds: [] };
+
 export async function insertRecord(
   tableName: string,
   data: RecordData,
-  departmentId: string | null,
+  departments: RecordDepartments | string | null,
   createdBy: string | null,
   db?: Db
 ) {
+  const { departmentId, sharedDepartmentIds } = asDepartments(departments);
   await ensureDataTable(tableName, db); // in the caller's transaction (the table may be new in it)
   const { rows } = await query<{ _id: string }>(
     // clock_timestamp(): records added together (an invoice's lines) keep their order
-    `INSERT INTO ${dataTable(tableName)} (data, department_id, created_by, created_at, updated_at)
-     VALUES ($1::jsonb, $2, $3, clock_timestamp(), clock_timestamp()) RETURNING _id`,
-    [JSON.stringify(data), departmentId, createdBy],
+    `INSERT INTO ${dataTable(tableName)} (data, department_id, shared_department_ids, created_by, created_at, updated_at)
+     VALUES ($1::jsonb, $2, $3::text[], $4, clock_timestamp(), clock_timestamp()) RETURNING _id`,
+    [JSON.stringify(data), departmentId, sharedDepartmentIds, createdBy],
     db
   );
   return rows[0]._id;
@@ -248,42 +259,51 @@ export async function insertRecord(
 // Insert many validated records at once (imports).
 export async function insertRecords(
   tableName: string,
-  records: { data: RecordData; departmentId: string | null }[],
+  records: { data: RecordData; departmentId: string | null; sharedDepartmentIds?: string[] }[],
   createdBy: string | null,
   db?: Db
 ) {
   if (!records.length) return [];
   await ensureDataTable(tableName, db);
   const { rows } = await query<{ _id: string }>(
-    `INSERT INTO ${dataTable(tableName)} (data, department_id, created_by, created_at, updated_at)
-     SELECT d, dep, $3, clock_timestamp(), clock_timestamp() FROM unnest($1::jsonb[], $2::text[]) WITH ORDINALITY AS r(d, dep, n)
+    // the shared lists travel as JSON arrays (unnest can't take an array of arrays of different lengths)
+    `INSERT INTO ${dataTable(tableName)} (data, department_id, shared_department_ids, created_by, created_at, updated_at)
+     SELECT d, dep, ARRAY(SELECT jsonb_array_elements_text(shared)), $4, clock_timestamp(), clock_timestamp()
+     FROM unnest($1::jsonb[], $2::text[], $3::jsonb[]) WITH ORDINALITY AS r(d, dep, shared, n)
      ORDER BY n
      RETURNING _id`,
-    [records.map((r) => JSON.stringify(r.data)), records.map((r) => r.departmentId), createdBy],
+    [
+      records.map((r) => JSON.stringify(r.data)),
+      records.map((r) => r.departmentId),
+      records.map((r) => JSON.stringify(r.sharedDepartmentIds ?? [])),
+      createdBy,
+    ],
     db
   );
   return rows.map((r) => r._id);
 }
 
-// Merge `data` into a record (only within `scope`). newDepartmentId:
+// Merge `data` into a record (only within `scope`). newDepartments:
 // undefined = keep. Returns the record before the change, or null.
 export async function updateRecord(
   tableName: string,
   id: string,
   data: RecordData,
-  opts: { scope: RecordScope; newDepartmentId?: string | null },
+  opts: { scope: RecordScope; newDepartments?: RecordDepartments },
   db?: Db
 ) {
   const table = dataTable(tableName);
   return orEmpty(async () => {
-    const params: unknown[] = [id, JSON.stringify(data), opts.newDepartmentId !== undefined, opts.newDepartmentId ?? null];
+    const next = opts.newDepartments;
+    const params: unknown[] = [id, JSON.stringify(data), next !== undefined, next?.departmentId ?? null, next?.sharedDepartmentIds ?? []];
     const { rows } = await query<{ old_data: RecordData; old_department: string | null }>(
       `UPDATE ${table} AS t
        SET data = t.data || $2::jsonb,
            department_id = CASE WHEN $3 THEN $4 ELSE t.department_id END,
+           shared_department_ids = CASE WHEN $3 THEN $5::text[] ELSE t.shared_department_ids END,
            updated_at = now()
        FROM (
-         SELECT t._id, t.data, t.department_id FROM ${table} t
+         SELECT t._id, t.data, t.department_id, t.shared_department_ids FROM ${table} t
          WHERE t._id = $1 AND ${scopeCondition(params, opts.scope)}
          FOR UPDATE
        ) AS old
@@ -301,7 +321,7 @@ export const lockRecord = (tableName: string, id: string, scope: RecordScope, db
   orEmpty(async () => {
     const params: unknown[] = [id];
     const { rows } = await query<Row>(
-      `SELECT t._id, t.data, t.department_id, t.created_by FROM ${dataTable(tableName)} t
+      `SELECT t._id, t.data, t.department_id, t.shared_department_ids, t.created_by FROM ${dataTable(tableName)} t
        WHERE t._id = $1 AND ${scopeCondition(params, scope)} FOR UPDATE`,
       params,
       db
@@ -315,7 +335,7 @@ export const deleteRecord = (tableName: string, id: string, scope: RecordScope, 
     const { rows } = await query<Row>(
       `DELETE FROM ${dataTable(tableName)} t
        WHERE t._id = $1 AND ${scopeCondition(params, scope)}
-       RETURNING t._id, t.data, t.department_id`,
+       RETURNING t._id, t.data, t.department_id, t.shared_department_ids`,
       params,
       db
     );
@@ -359,7 +379,7 @@ export async function* scanRecords(
       async () =>
         (
           await query<Row & { created_at: Date; department_name: string | null }>(
-            `SELECT t._id, t.data, t.department_id, t.created_by, t.created_at, d.name AS department_name
+            `SELECT t._id, t.data, t.department_id, t.shared_department_ids, t.created_by, t.created_at, d.name AS department_name
              FROM ${dataTable(tableName)} t LEFT JOIN departments d ON d._id = t.department_id
              WHERE ${conditions.join(" AND ")}
              ORDER BY t.created_at, t._id

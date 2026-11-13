@@ -5,7 +5,7 @@ import { dataTable } from "../db/dataTables.js";
 import { query, quoteLiteral } from "../db/pool.js";
 import { HttpError } from "../lib/http.js";
 import { audit, diffRecord, snapshot } from "../repo/auditRepo.js";
-import { deleteRecord, insertRecord, lockRecord, updateRecord } from "../repo/recordRepo.js";
+import { deleteRecord, insertRecord, lockRecord, updateRecord, type RecordDepartments } from "../repo/recordRepo.js";
 import { assignAutonumbers, autonumberColumns } from "../schema/autonumber.js";
 import { withDefaults } from "../schema/defaults.js";
 import { applyFormulas } from "../schema/formula.js";
@@ -69,7 +69,7 @@ export async function saveChildren(
   user: CurrentUser,
   parent: TableSchema,
   parentId: string,
-  departmentId: string | null,
+  departments: RecordDepartments | string | null, // lines are visible to whoever sees the parent
   raw: unknown,
   client: pg.PoolClient,
   // a preview (?preview=1) of unsaved lines: don't insist on required fields yet
@@ -158,7 +158,7 @@ export async function saveChildren(
     const createdValues = created.map((c) => c.values);
     await assignAutonumbers(schema, createdValues, client);
     for (const values of createdValues) {
-      const id = await insertRecord(schema.tableName, values, departmentId, user._id, client);
+      const id = await insertRecord(schema.tableName, values, departments, user._id, client);
       ids.push(id);
       rows.push(values);
       await audit(req, { action: "create", entity: "record", tableName: schema.tableName, recordId: id, changes: snapshot(values, "to") }, client);

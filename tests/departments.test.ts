@@ -42,8 +42,8 @@ describe('"Department" columns and "Visible to"', async () => {
 
     await admin.put(`/api/schema/${staff}`, { departmentIds: [sales._id, ops._id] }).expect(200);
     expect((await admin.get(`/api/table/${staff}`)).body.data[0]._department).toBe(sales.name);
-    // Sam only sees Sales, so the column still says nothing new to him
-    expect((await sam.get(`/api/table/${staff}`)).body.data[0]).not.toHaveProperty("_department");
+    // Sam is only in Sales, but records may be shared with Ops too, so he sees it as well
+    expect((await sam.get(`/api/table/${staff}`)).body.data[0]._department).toBe(sales.name);
     await admin.put(`/api/schema/${staff}`, { departmentIds: [sales._id] }).expect(200);
   });
 

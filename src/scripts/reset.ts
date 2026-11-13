@@ -1,5 +1,6 @@
-// Wipe ALL data: every table and record, users, roles, departments, audit log,
-// jobs, sessions and every uploaded file. Then the schema is recreated and the
+// Wipe ALL data: every table and record, users, roles, departments, installed
+// apps, automations, notifications, audit log, jobs, sessions and every
+// uploaded file. Then the schema is recreated and the
 // first admin account is created again from ADMIN_USERNAME / ADMIN_PASSWORD.
 //
 //   pnpm db:reset              (asks you to type RESET)
@@ -29,6 +30,10 @@ const SYSTEM_TABLES = [
   "roles",
   "departments",
   "table_schemas",
+  "counters",
+  "installed_apps",
+  "notifications",
+  "automations",
   "schema_migrations",
 ];
 
@@ -41,7 +46,7 @@ async function confirm(): Promise<boolean> {
 
   const db = new URL(env.databaseUrl).pathname.slice(1);
   console.log(`\nThis permanently deletes ALL data in database "${db}" and ALL files in bucket "${env.s3.bucket}":`);
-  console.log("tables and records, users, roles, departments, audit log, jobs and uploads.\n");
+  console.log("tables and records, users, roles, departments, apps, automations, notifications, audit log, jobs and uploads.\n");
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = await rl.question('Type RESET to continue: ');
   rl.close();
@@ -62,7 +67,7 @@ async function main() {
   try {
     await pool.query("DROP SCHEMA IF EXISTS erp_data CASCADE");
     await pool.query(`DROP TABLE IF EXISTS ${SYSTEM_TABLES.join(", ")} CASCADE`);
-    await pool.query("DROP FUNCTION IF EXISTS erp_search_text(jsonb), erp_try_numeric(text)");
+    await pool.query("DROP FUNCTION IF EXISTS erp_search_text(jsonb), erp_try_numeric(text), erp_try_date(text)");
     await pool.query("COMMIT");
   } catch (error) {
     await pool.query("ROLLBACK");

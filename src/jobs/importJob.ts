@@ -131,7 +131,10 @@ export async function runImport(job: Job) {
 
   const uploadKey = String(job.params.uploadKey ?? "");
   const allowed = allowedDepartments(user, schema);
-  const byName = new Map(allowed.map((d) => [d.name.toLowerCase(), d._id]));
+  const allowedIds = new Set(allowed.map((d) => d._id));
+  // "Visible to" may name any of the table's departments ("Engineering; Design"),
+  // as long as one of them is the importer's own
+  const byName = new Map(schema.departments.map((d) => [d.name.trim().toLowerCase(), d._id]));
   const defaultDepartment =
     typeof job.params.departmentId === "string" && allowed.some((d) => d._id === job.params.departmentId)
       ? job.params.departmentId
@@ -179,7 +182,7 @@ export async function runImport(job: Job) {
     const problems = await resolveRelations(user, schema, batch);
     await resolveUsers(schema, batch, problems);
     await resolveDepartmentColumns(schema, batch, problems);
-    const valid: { data: RecordData; departmentId: string | null }[] = [];
+    const valid: { data: RecordData; departmentId: string | null; sharedDepartmentIds: string[] }[] = [];
 
     for (const row of batch) {
       const messages = [...(problems.get(row.line) ?? [])];
@@ -192,9 +195,19 @@ export async function runImport(job: Job) {
       );
 
       let departmentId: string | null | undefined = defaultDepartment;
+      let sharedDepartmentIds: string[] = [];
       if (row.department) {
-        departmentId = byName.get(row.department.toLowerCase());
-        if (departmentId === undefined) messages.push(`Visible to: "${row.department}" isn't one of your departments for this table`);
+        const names = row.department.split(";").map((n) => n.trim()).filter(Boolean);
+        const ids = [...new Set(names.map((n) => byName.get(n.toLowerCase())))];
+        const unknown = names.filter((n) => !byName.has(n.toLowerCase()));
+        if (unknown.length) {
+          messages.push(`Visible to: "${unknown.join(", ")}" isn't a department of this table`);
+        } else if (!isAdmin(user) && !ids.some((id) => allowedIds.has(id!))) {
+          messages.push(`Visible to: "${row.department}" must include one of your departments`);
+        } else {
+          departmentId = ids[0];
+          sharedDepartmentIds = ids.slice(1) as string[];
+        }
       } else if (departmentId === undefined) {
         messages.push("Visible to: choose a department (add a \"Visible to\" column, or pick one when importing)");
       }
@@ -203,7 +216,7 @@ export async function runImport(job: Job) {
         failed++;
         fail(row.line, messages.join("; "));
       } else {
-        valid.push({ data: values, departmentId: departmentId ?? null });
+        valid.push({ data: values, departmentId: departmentId ?? null, sharedDepartmentIds });
       }
     }
 

@@ -178,7 +178,10 @@ export function filterConditions(schema: TableSchema, filters: RecordFilter[], p
 
   return filters.map((f) => {
     if (f.field === "_department") {
-      return f.op === "isEmpty" ? "t.department_id IS NULL" : `t.department_id = ANY(${p(f.value)}::text[])`;
+      if (f.op === "isEmpty") return "t.department_id IS NULL";
+      const ids = `${p(f.value)}::text[]`;
+      // visible to any of them: as the first department or a shared one
+      return `(t.department_id = ANY(${ids}) OR t.shared_department_ids && ${ids})`;
     }
     if (f.field === "_createdBy") {
       if (f.op === "isEmpty") return "t.created_by IS NULL";

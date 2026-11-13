@@ -3,8 +3,8 @@ import type { Column } from "../types.js";
 
 // CSV conventions shared by export and import, so files round-trip:
 //   header = column labels (import also accepts names), plus "Visible to" (the
-//   record's department; only for tables shared with several departments;
-//   import also accepts the old header "Department")
+//   record's departments, separated by ";"; only for tables shared with several
+//   departments; import also accepts the old header "Department")
 //   multiple values (multi-relations, several choices, images, files) separated by ";"
 //   choices as the option label (import ignores case)
 //   relations exported as the linked record's display label (import also accepts ids)

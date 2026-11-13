@@ -6,7 +6,8 @@ import { pool, query, query as runQuery, quoteIdent, quoteLiteral, type Db } fro
 
 // Each ERP table is a Postgres table in the erp_data schema. Field values are
 // stored as JSONB so columns can change from the UI without migrations;
-// department_id says which department a record belongs to.
+// department_id says which department a record belongs to, and
+// shared_department_ids which other departments may see it too.
 export const DATA_SCHEMA = "erp_data";
 
 export const dataTable = (name: string) => `${DATA_SCHEMA}.${quoteIdent(name)}`;
@@ -40,6 +41,12 @@ export async function ensureDataTable(tableName: string, db?: Db): Promise<void>
     ALTER TABLE ${table}
     ADD COLUMN IF NOT EXISTS department_id TEXT REFERENCES departments(_id) ON DELETE SET NULL
   `);
+  // "Visible to" several departments (see migrations/009_shared_departments.sql, same index name)
+  await query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS shared_department_ids TEXT[] NOT NULL DEFAULT '{}'`);
+  await query(
+    `CREATE INDEX IF NOT EXISTS ${quoteIdent(`${createHash("md5").update(tableName).digest("hex").slice(0, 16)}_shareddept_idx`)}
+     ON ${table} USING gin (shared_department_ids)`
+  );
   // "Created by" (see migrations/003_created_by.sql, which uses the same index name)
   await query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS created_by TEXT`);
   await query(

@@ -2,7 +2,7 @@ import type pg from "pg";
 import { dataTable, ensureDataTable, syncColumnIndexes } from "../db/dataTables.js";
 import { query, withTransaction } from "../db/pool.js";
 import { HttpError } from "../lib/http.js";
-import { insertRecord } from "../repo/recordRepo.js";
+import { insertRecord, type RecordDepartments } from "../repo/recordRepo.js";
 import { assignAutonumbers, backfillAutonumber } from "../schema/autonumber.js";
 import { FILE_COLUMN_TYPES, normalizeColumn, validateTableName } from "../schema/columns.js";
 import { withDefaults } from "../schema/defaults.js";
@@ -506,7 +506,7 @@ export async function install(keys: string[], options: InstallOptions, user: Cur
           const schema = entry.tableName ? schemaFor.get(entry.tableName) : undefined;
           if (!schema || entry.action !== "create") continue;
           for (const raw of rows[table.key] ?? []) {
-            const id = await insertSample(schema, app, raw, ids, departmentIds[0] ?? null, user, client);
+            const id = await insertSample(schema, app, raw, ids, { departmentId: departmentIds[0] ?? null, sharedDepartmentIds: departmentIds.slice(1) }, user, client);
             if (!id) continue;
             if (raw.$id) {
               ids.set(`${key}:${raw.$id}`, id);
@@ -589,7 +589,7 @@ async function insertSample(
   app: AppBlueprint,
   raw: Record<string, unknown>,
   ids: Map<string, string>,
-  departmentId: string | null,
+  departments: RecordDepartments, // visible to every department the app was installed for
   user: CurrentUser,
   client: pg.PoolClient
 ): Promise<string | null> {
@@ -616,7 +616,7 @@ async function insertSample(
   const { values } = coerceValues(schema, withDefaults(schema, payload, user));
   const records: RecordData[] = [values];
   await assignAutonumbers(schema, records, client);
-  return insertRecord(schema.tableName, records[0], departmentId, user._id, client);
+  return insertRecord(schema.tableName, records[0], departments, user._id, client);
 }
 
 /* ---------------- uninstall / sample data ---------------- */

@@ -16,6 +16,7 @@ import {
   lockRecord,
   updateRecord,
   type ListOptions,
+  type RecordDepartments,
 } from "../repo/recordRepo.js";
 import { parseFilters } from "../schema/filters.js";
 import { columnByNameOrLabel, FILE_COLUMN_TYPES, isSortable, pickDisplayField } from "../schema/columns.js";
@@ -68,30 +69,50 @@ export async function loadTable(req: Request, action: Action): Promise<TableSche
 
 const departmentError = (message: string) => new HttpError(400, message, { _departmentId: message });
 
-// Which department a created/edited record goes to. `requested` is the
-// payload's _departmentId (undefined = not sent = keep for edits).
-export function resolveDepartment(
+const oneDepartment = (id: string | null): RecordDepartments => ({ departmentId: id, sharedDepartmentIds: [] });
+const visibleTo = (d: RecordDepartments) => [d.departmentId, ...d.sharedDepartmentIds].filter((id): id is string => Boolean(id));
+
+// "Visible to": which departments a created/edited record goes to, from the
+// payload's _departmentIds (a list) or _departmentId (one). undefined = not
+// sent, or the same as `current` = keep. Any of the table's departments may
+// be chosen, as long as one of them is the user's own (so nobody shares a
+// record away from themselves); admins may leave records unassigned.
+export function resolveDepartments(
   user: CurrentUser,
   schema: TableSchema,
-  requested: unknown,
-  creating: boolean
-): string | null | undefined {
+  payload: Record<string, unknown>,
+  creating: boolean,
+  current?: RecordDepartments
+): RecordDepartments | undefined {
   const allowed = allowedDepartments(user, schema).map((d) => d._id);
+  const raw = payload._departmentIds !== undefined ? payload._departmentIds : payload._departmentId;
 
-  if (requested === undefined) {
+  if (raw === undefined) {
     if (!creating) return undefined;
-    if (allowed.length === 1) return allowed[0];
-    if (allowed.length === 0 && isAdmin(user)) return null;
+    if (allowed.length === 1) return oneDepartment(allowed[0]);
+    if (allowed.length === 0 && isAdmin(user)) return oneDepartment(null);
     throw departmentError("Please choose a department for this record");
   }
-  if (requested === null || requested === "") {
-    if (isAdmin(user)) return null; // admins may leave records unassigned
+  const list = raw === null || raw === "" ? [] : Array.isArray(raw) ? raw : [raw];
+  if (!list.every((id) => typeof id === "string")) throw departmentError("Choose departments from the list");
+  const ids = [...new Set((list as string[]).filter(Boolean))];
+
+  if (current) {
+    const before = visibleTo(current);
+    if (before.length === ids.length && ids.every((id) => before.includes(id))) return undefined;
+  }
+  if (!ids.length) {
+    if (isAdmin(user)) return oneDepartment(null);
     throw departmentError("Please choose a department for this record");
   }
-  if (typeof requested !== "string" || !allowed.includes(requested)) {
-    throw departmentError("You can't assign records to that department");
+  const tableDepartments = new Set(schema.departments.map((d) => d._id));
+  if (ids.some((id) => !tableDepartments.has(id))) throw departmentError("You can't assign records to that department");
+  if (!isAdmin(user) && !ids.some((id) => allowed.includes(id))) {
+    throw departmentError(
+      allowed.length ? "Keep at least one of your own departments, or you couldn't see this record anymore" : "You can't assign records to that department"
+    );
   }
-  return requested;
+  return { departmentId: ids[0], sharedDepartmentIds: ids.slice(1) };
 }
 
 const throwIfErrors = (errors: Record<string, string>) => {
@@ -104,6 +125,10 @@ const fileUrls = (value: unknown): string[] =>
 
 const departmentName = (schema: TableSchema, id: string | null | undefined) =>
   id ? (schema.departments.find((d) => d._id === id)?.name ?? id) : null;
+
+// "Engineering, Design" (null when visible to admins only)
+const visibleToNames = (schema: TableSchema, d: RecordDepartments) =>
+  visibleTo(d).map((id) => departmentName(schema, id)).join(", ") || null;
 
 /* ---------------- list ---------------- */
 
@@ -166,9 +191,11 @@ export async function listHandler(req: Request, res: Response) {
   // departments (with one, every record is in it), and only to people who can
   // see more than one of them. Admins also see it while some records are
   // "admins only" (e.g. after their department was deleted), so they can spot them.
+  // "Visible to" whenever the table is shared with several departments (a
+  // record may be visible to several, or come from another department);
+  // admins also while some records are admins-only
   const withDepartment =
-    (schema.departments.length > 1 && (isAdmin(user) || allowedDepartments(user, schema).length > 1)) ||
-    (isAdmin(user) && (await countUnassigned(schema.tableName)) > 0);
+    schema.departments.length > 1 || (isAdmin(user) && (await countUnassigned(schema.tableName)) > 0);
   const relationLabel = (labels: Map<string, string> | undefined, id: unknown) =>
     id ? (labels?.get(String(id)) ?? "—") : "";
 
@@ -203,8 +230,9 @@ export async function listHandler(req: Request, res: Response) {
       } else out[column.name] = value ?? null;
     }
     if (withDepartment) {
-      out._department = row.departmentName ?? "Admins only";
+      out._department = visibleToNames(schema, row) ?? "Admins only";
       out._departmentId = row.departmentId;
+      out._departmentIds = visibleTo(row);
     }
     return out;
   });
@@ -253,7 +281,8 @@ export async function getHandler(req: Request, res: Response) {
     _id: record._id,
     ...record.data,
     _departmentId: record.departmentId,
-    _departmentName: record.departmentName,
+    _departmentIds: visibleTo(record),
+    _departmentName: visibleToNames(schema, record),
     _createdBy: userLabel(creator, record.createdBy) || null,
     _createdById: record.createdBy ?? null,
     _createdAt: record.createdAt,
@@ -284,7 +313,7 @@ export async function bulkDeleteHandler(req: Request, res: Response) {
           recordId: id,
           changes: {
             ...snapshot(record.data, "from"),
-            ...(record.departmentId ? { _department: { from: departmentName(schema, record.departmentId) } } : {}),
+            ...(record.departmentId ? { _department: { from: visibleToNames(schema, record) } } : {}),
           },
         },
         client
@@ -312,23 +341,23 @@ export async function createHandler(req: Request, res: Response) {
 
   const { values, errors } = coerceValues(schema, payload);
   throwIfErrors({ ...errors, ...(preview ? {} : checkRequired(schema, values)), ...checkChoices(schema, values, {}, user) });
-  const departmentId = preview
+  const departments = preview
     ? (() => {
         try {
-          return resolveDepartment(user, schema, payload._departmentId, true) ?? null;
+          return resolveDepartments(user, schema, payload, true) ?? oneDepartment(null);
         } catch {
-          return null; // not chosen yet
+          return oneDepartment(null); // not chosen yet
         }
       })()
-    : (resolveDepartment(user, schema, payload._departmentId, true) ?? null);
+    : (resolveDepartments(user, schema, payload, true) ?? oneDepartment(null));
   throwIfErrors(await checkRelations(user, schema, values));
 
   const id = await previewOrSave(req, res, () => withTransaction(async (client) => {
     await assignAutonumbers(schema, [values], client);
-    const newId = await insertRecord(schema.tableName, values, departmentId, user._id, client);
+    const newId = await insertRecord(schema.tableName, values, departments, user._id, client);
     await applyFormulas(schema, [newId], client);
     // its line items (an invoice's lines), then totals over them
-    await saveChildren(req, user, schema, newId, departmentId, payload._children, client, { preview });
+    await saveChildren(req, user, schema, newId, departments, payload._children, client, { preview });
     if (preview) throw new PreviewDone(await readBack(schema, newId, client));
     await refreshParents(schema.tableName, [values], client); // totals in the records it links to
     // "assigned you" notifications, and the table's automations
@@ -342,7 +371,7 @@ export async function createHandler(req: Request, res: Response) {
         recordId: newId,
         changes: {
           ...snapshot(values, "to"),
-          ...(departmentId ? { _department: { to: departmentName(schema, departmentId) } } : {}),
+          ...(departments.departmentId ? { _department: { to: visibleToNames(schema, departments) } } : {}),
         },
       },
       client
@@ -364,21 +393,20 @@ export async function updateHandler(req: Request, res: Response) {
 
   const { values, errors } = coerceValues(schema, payload);
   throwIfErrors(errors);
-  const newDepartmentId = resolveDepartment(user, schema, payload._departmentId, false);
   const preview = isPreview(req);
 
   const saved = await previewOrSave(req, res, () => withTransaction(async (client) => {
     const current = await lockRecord(schema.tableName, id, recordScope(user, schema), client);
     if (!current) throw new HttpError(404, "Record not found");
 
+    const newDepartments = resolveDepartments(user, schema, payload, false, current);
     const merged: RecordData = { ...current.data, ...values };
     throwIfErrors({ ...(preview ? {} : checkRequired(schema, merged)), ...checkChoices(schema, values, current.data, user) });
     throwIfErrors(await checkRelations(user, schema, values, current.data));
 
-    await updateRecord(schema.tableName, id, values, { scope: ALL_RECORDS, newDepartmentId }, client);
+    await updateRecord(schema.tableName, id, values, { scope: ALL_RECORDS, newDepartments }, client);
     await applyFormulas(schema, [id], client);
-    const departmentId = newDepartmentId !== undefined ? newDepartmentId : current.departmentId;
-    await saveChildren(req, user, schema, id, departmentId, payload._children, client, { preview });
+    await saveChildren(req, user, schema, id, newDepartments ?? current, payload._children, client, { preview });
     if (preview) throw new PreviewDone(await readBack(schema, id, client));
     // totals in the records it links to: before (it may have moved) and after
     await refreshParents(schema.tableName, [current.data, merged], client);
@@ -386,11 +414,8 @@ export async function updateHandler(req: Request, res: Response) {
     await afterSave(schema, id, current.data, merged, current.createdBy ?? null, user, client);
 
     const changes: Record<string, unknown> = diffRecord(current.data, merged);
-    if (newDepartmentId !== undefined && newDepartmentId !== current.departmentId) {
-      changes._department = {
-        from: departmentName(schema, current.departmentId),
-        to: departmentName(schema, newDepartmentId),
-      };
+    if (newDepartments) {
+      changes._department = { from: visibleToNames(schema, current), to: visibleToNames(schema, newDepartments) };
     }
     if (Object.keys(changes).length) {
       await audit(req, { action: "update", entity: "record", tableName: schema.tableName, recordId: id, changes }, client);
@@ -431,7 +456,7 @@ export async function deleteHandler(req: Request, res: Response) {
         recordId: id,
         changes: {
           ...snapshot(record.data, "from"),
-          ...(record.departmentId ? { _department: { from: departmentName(schema, record.departmentId) } } : {}),
+          ...(record.departmentId ? { _department: { from: visibleToNames(schema, record) } } : {}),
         },
       },
       client

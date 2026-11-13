@@ -141,7 +141,9 @@ export type RecordData = Record<string, unknown>;
 export interface StoredRecord {
   _id: string;
   data: RecordData;
+  // "Visible to": the first department (null = admins only), and any others
   departmentId: string | null;
+  sharedDepartmentIds: string[];
   // user who created the record (null for records created before this was tracked, or by the system)
   createdBy?: string | null;
   createdAt?: Date;

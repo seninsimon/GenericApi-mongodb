@@ -50,6 +50,12 @@ export async function runExport(job: Job) {
 
   // "Visible to" only when the table is shared with several departments (as in the list)
   const withDepartment = schema.departments.length > 1;
+  // "Engineering; Design": the record's first department, then the shared ones
+  const names = new Map(schema.departments.map((d) => [d._id, d.name]));
+  const visibleTo = (r: { departmentId: string | null; sharedDepartmentIds: string[]; departmentName?: string | null }) =>
+    [r.departmentId ? (r.departmentName ?? names.get(r.departmentId) ?? "") : "", ...r.sharedDepartmentIds.map((id) => names.get(id) ?? "")]
+      .filter(Boolean)
+      .join("; ");
   const header = [
     ...schema.columns.map((c) => c.label || c.name),
     ...(withDepartment ? [DEPARTMENT_HEADER] : []),
@@ -88,7 +94,7 @@ export async function runExport(job: Job) {
               c.type === "user" ? people.map : c.type === "department" ? departments : labels.get(c.name)
             )
           ),
-          ...(withDepartment ? [record.departmentName ?? ""] : []),
+          ...(withDepartment ? [visibleTo(record)] : []),
           people.label(record.createdBy),
         ]);
       }
