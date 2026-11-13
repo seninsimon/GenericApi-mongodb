@@ -3,7 +3,7 @@ import type { AppBlueprint } from "../types.js";
 
 export const crm: AppBlueprint = {
   key: "crm",
-  version: 1,
+  version: 2, // 2: managers hear about won deals
   name: "Sales pipeline (CRM)",
   description: "Deals from lead to won, with the calls, emails and meetings along the way.",
   icon: "IconTargetArrow",
@@ -41,6 +41,23 @@ export const crm: AppBlueprint = {
         user("by", "By", { default: "$me" }),
         longText("notes", "Notes", { showInTable: false }),
       ],
+    },
+  ],
+  automations: [
+    {
+      table: "deals",
+      name: "Tell the sales managers when a deal is won",
+      trigger: { when: "changed", column: "stage", to: "Won" },
+      actions: [{ do: "notify", who: "$managers", message: "Deal won" }],
+    },
+  ],
+  reminders: [
+    {
+      table: "deals",
+      label: "Your deals past their expected close date",
+      filters: [{ field: "expected_close", op: "before", value: "$today" }, { field: "stage", op: "notIn", value: ["Won", "Lost"] }],
+      who: "owner",
+      date: "expected_close",
     },
   ],
   dashboard: {

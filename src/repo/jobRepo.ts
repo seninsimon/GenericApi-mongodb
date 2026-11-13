@@ -9,6 +9,7 @@ export type JobStatus = "queued" | "running" | "done" | "failed";
 export interface JobResult {
   rows?: number;
   inserted?: number;
+  updated?: number;
   failed?: number;
   errors?: { row: number; message: string }[];
 }

@@ -70,6 +70,15 @@ export const hr: AppBlueprint = {
       actions: [{ do: "notify", who: "employee.account", message: "Your leave request was rejected" }],
     },
   ],
+  reminders: [
+    {
+      table: "leave_requests",
+      label: "Approved leave starting tomorrow",
+      filters: [{ field: "from", op: "eq", value: "$today+1" }, { field: "status", op: "in", value: ["Approved"] }],
+      who: "$managers",
+      date: "from",
+    },
+  ],
   dashboard: {
     tiles: [{ label: "Leave waiting for approval", table: "leave_requests", filters: [{ field: "status", op: "in", value: ["Pending"] }] }],
     breakdown: { label: "Leave by type", table: "leave_requests", column: "type" },

@@ -61,6 +61,15 @@ export const projects: AppBlueprint = {
       ],
     },
   ],
+  reminders: [
+    {
+      table: "tasks",
+      label: "Your tasks due by tomorrow, or overdue",
+      filters: [{ field: "due", op: "before", value: "$today+2" }, { field: "status", op: "notIn", value: ["Done"] }],
+      who: "assignee",
+      date: "due",
+    },
+  ],
   dashboard: {
     tiles: [
       { label: "Open tasks", table: "tasks", filters: [{ field: "status", op: "notIn", value: ["Done"] }] },

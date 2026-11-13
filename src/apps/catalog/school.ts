@@ -92,6 +92,9 @@ export const school: AppBlueprint = {
       ],
     },
   ],
+  reminders: [
+    { table: "fees", label: "Overdue fees", filters: [{ field: "due", op: "before", value: "$today" }, { field: "balance", op: "gt", value: 0 }], who: "$managers", date: "due" },
+  ],
   dashboard: {
     tiles: [
       { label: "Fees still due", table: "fees", filters: [{ field: "balance", op: "gt", value: 0 }] },

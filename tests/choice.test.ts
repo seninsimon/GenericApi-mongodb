@@ -155,7 +155,7 @@ describe("Choice columns", async () => {
     const exp = await admin.post(`/api/table/${csvT}/export`);
     await drainJobs();
     const lines = (await admin.get(`/api/jobs/${exp.body.job._id}/download`)).text.replace(/^﻿/, "").trim().split(/\r?\n/);
-    expect(lines).toContain("one,Lead,X;Y,Administrator");
+    expect(lines.some((l) => l.startsWith("one,Lead,X;Y,Administrator,"))).toBe(true); // then the record's ID
     await admin.del(`/api/schema/${csvT}`);
   });
 

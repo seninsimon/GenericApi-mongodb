@@ -99,14 +99,29 @@ const kindOf = (column: Column): Kind => {
 };
 
 const MAX_FILTERS = 20;
-// "$today" stands for the current date, so a saved "Overdue" view keeps working
+// "$today" stands for the current date, so a saved "Overdue" view keeps working;
+// "$today+1" is tomorrow, "$today+30" a month ahead, "$today-7" a week ago
 export const TODAY_TOKEN = "$today";
-const isDate = (v: unknown): v is string => typeof v === "string" && (/^\d{4}-\d{2}-\d{2}$/.test(v) || v === TODAY_TOKEN);
+const RELATIVE = /^\$today(?:([+-])(\d{1,3}))?$/;
+const isDate = (v: unknown): v is string => typeof v === "string" && (/^\d{4}-\d{2}-\d{2}$/.test(v) || RELATIVE.test(v));
+// "2026-12-08" + days
+export const addDays = (iso: string, days: number) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+};
 const todayIso = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
-const dateValue = (v: unknown) => (v === TODAY_TOKEN ? todayIso() : v);
+// a "$today…" token as a date; `today`: the date that counts as today (the
+// morning summary passes the date in the organization's time zone)
+export const resolveDateToken = (v: unknown, today = todayIso()) => {
+  const m = typeof v === "string" ? RELATIVE.exec(v) : null;
+  if (!m) return v;
+  return m[1] ? addDays(today, (m[1] === "-" ? -1 : 1) * Number(m[2])) : today;
+};
+const dateValue = (v: unknown) => resolveDateToken(v);
 const isNumber = (v: unknown) => v !== "" && v !== null && Number.isFinite(Number(v));
 
 // Parse and validate the ?filters= query value against the table's columns.

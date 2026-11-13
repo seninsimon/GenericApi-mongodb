@@ -53,12 +53,12 @@ function coerce(column: Column, value: unknown): unknown {
       if (typeof value === "boolean") return value;
       if (value === "true" || value === "false") return value === "true";
       if (value === "") return null;
-      throw "must be true or false";
+      throw "must be yes or no";
     }
     case "date": {
       if (value === "") return null;
       if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(value) || Number.isNaN(Date.parse(value))) {
-        throw "must be a date (YYYY-MM-DD)";
+        throw "must be a date, written like 2026-12-31";
       }
       return value;
     }

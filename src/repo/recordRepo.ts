@@ -321,7 +321,7 @@ export const lockRecord = (tableName: string, id: string, scope: RecordScope, db
   orEmpty(async () => {
     const params: unknown[] = [id];
     const { rows } = await query<Row>(
-      `SELECT t._id, t.data, t.department_id, t.shared_department_ids, t.created_by FROM ${dataTable(tableName)} t
+      `SELECT t._id, t.data, t.department_id, t.shared_department_ids, t.created_by, t.updated_at FROM ${dataTable(tableName)} t
        WHERE t._id = $1 AND ${scopeCondition(params, scope)} FOR UPDATE`,
       params,
       db

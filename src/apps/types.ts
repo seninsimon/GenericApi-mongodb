@@ -59,6 +59,20 @@ export interface AppBlueprint {
   sample?: (ctx: SampleContext) => Record<string, SampleRow[]>;
   // on the Home page: a few counts ("Open tasks") and one breakdown ("Tasks by status")
   dashboard?: DashboardBlueprint;
+  // in the morning summary email: "Your tasks due by tomorrow or overdue"
+  reminders?: ReminderBlueprint[];
+}
+
+// One list in the morning summary. filters: as dashboard tiles ("$today+1" is
+// tomorrow). who: a User column ("assignee"), a link's User column
+// ("employee.account"), or "$managers" (the app's managers). date: the column
+// shown next to each record ("due 8 Dec").
+export interface ReminderBlueprint {
+  table: string;
+  label: string;
+  filters: TileFilter[];
+  who: string;
+  date?: string;
 }
 
 export type TileFilter = { field: string; op: string; value?: unknown; value2?: unknown };

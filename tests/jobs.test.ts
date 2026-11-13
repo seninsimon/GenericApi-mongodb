@@ -39,8 +39,8 @@ describe("CSV export / import jobs", async () => {
     const lines = file.text.replace(/^﻿/, "").trim().split(/\r?\n/);
     // one department: no "Visible to" column. The user has no full name, so
     // "Created by" shows the username
-    expect(lines[0]).toBe("Title,Qty,OK,Owner,Created by");
-    expect(lines[1]).toBe(`'=HYPERLINK(evil),-5,true,Ann,${world.username}`);
+    expect(lines[0]).toBe("Title,Qty,OK,Owner,Created by,ID");
+    expect(lines[1]).toMatch(new RegExp(`^'=HYPERLINK\\(evil\\),-5,true,Ann,${world.username},[0-9a-f-]{36}$`));
   });
 
   it("imports CSV rows, resolving relations by label and reporting bad rows", async () => {

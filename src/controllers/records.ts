@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { ALL_RECORDS, allowedDepartments, can, isAdmin, recordScope } from "../auth/access.js";
 import { checkNotApprovingOwn, keepItYours, ownLinkIds, selfRecords } from "../auth/ownership.js";
-import { withTransaction } from "../db/pool.js";
+import { query, withTransaction, type Db } from "../db/pool.js";
 import { HttpError, intParam, param, toIdList } from "../lib/http.js";
 import { currentUser } from "../middleware/auth.js";
 import { audit, diffRecord, snapshot } from "../repo/auditRepo.js";
@@ -54,6 +54,7 @@ import { checkChoices, checkRelations, checkRequired, coerceValues } from "../sc
 import { deleteUploads } from "../storage.js";
 import type { Action, CurrentUser, RecordData, TableSchema } from "../types.js";
 import { htmlToText } from "../lib/text.js";
+import { emitChange } from "../live/events.js";
 
 const VERBS: Record<Action, string> = { view: "view", create: "add", edit: "edit", delete: "delete" };
 
@@ -323,6 +324,7 @@ export async function bulkDeleteHandler(req: Request, res: Response) {
     for (const id of ids) {
       const record = await deleteRecord(schema.tableName, id, recordScope(user, schema), client);
       if (!record) continue;
+      await emitChange(schema.tableName, id, user, client, true);
       removed.push(record);
       await audit(
         req,
@@ -417,6 +419,9 @@ export async function updateHandler(req: Request, res: Response) {
   const payload = { ...((req.body ?? {}) as Record<string, unknown>) };
   // auto-numbers are given once, when the record is created
   for (const column of autonumberColumns(schema)) delete payload[column.name];
+  // the version the form started from (its _updatedAt); not sent = no check
+  const expectedUpdatedAt = payload._expectedUpdatedAt;
+  delete payload._expectedUpdatedAt;
 
   const { values, errors } = coerceValues(schema, payload);
   throwIfErrors(errors);
@@ -425,6 +430,11 @@ export async function updateHandler(req: Request, res: Response) {
   const saved = await previewOrSave(req, res, () => withTransaction(async (client) => {
     const current = await lockRecord(schema.tableName, id, recordScope(user, schema), client);
     if (!current) throw new HttpError(404, "Record not found");
+    // someone else saved it after this form was opened: ask before overwriting
+    if (!preview && typeof expectedUpdatedAt === "string" && current.updatedAt && new Date(expectedUpdatedAt).getTime() !== current.updatedAt.getTime()) {
+      const by = await lastEditor(schema.tableName, id, client);
+      throw new HttpError(409, `${by ?? "Someone"} changed this record while you were editing it`, { _conflict: by ?? "Someone" });
+    }
 
     const newDepartments = resolveDepartments(user, schema, payload, false, current);
     await fillFromUsers(schema, values, current.data);
@@ -475,6 +485,7 @@ export async function deleteHandler(req: Request, res: Response) {
   const deleted = await withTransaction(async (client) => {
     const record = await deleteRecord(schema.tableName, id, recordScope(user, schema), client);
     if (!record) throw new HttpError(404, "Record not found");
+    await emitChange(schema.tableName, id, user, client, true);
     await deleteChildren(schema.tableName, [id], client); // its line items go with it
     await refreshParents(schema.tableName, [record.data], client);
     await audit(
@@ -498,4 +509,15 @@ export async function deleteHandler(req: Request, res: Response) {
     schema.columns.filter((c) => FILE_COLUMN_TYPES.includes(c.type)).flatMap((c) => fileUrls(deleted.data[c.name]))
   );
   res.json({ message: "Deleted successfully", result: { acknowledged: true, deletedCount: 1 } });
+}
+
+// Who last saved a record (from the audit log), for "Hana changed this record".
+async function lastEditor(tableName: string, id: string, db: Db) {
+  const { rows } = await query<{ name: string }>(
+    `SELECT COALESCE(NULLIF(u.full_name, ''), a.username) AS name FROM audit_log a LEFT JOIN users u ON u._id = a.user_id
+     WHERE a.table_name = $1 AND a.record_id = $2 AND a.entity = 'record' ORDER BY a.at DESC LIMIT 1`,
+    [tableName, id],
+    db
+  );
+  return rows[0]?.name ?? null;
 }

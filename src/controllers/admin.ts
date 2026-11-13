@@ -1,3 +1,5 @@
+import { sendPasswordLink, unusablePasswordHash } from "../auth/passwordLinks.js";
+import { mailEnabled } from "../mail/mailer.js";
 import type { Request, Response } from "express";
 import { accessOf, accessOptions, rolesForAccess } from "../apps/access.js";
 import { addToDirectory } from "../apps/directory.js";
@@ -54,7 +56,11 @@ async function readUserInput(body: Record<string, unknown>, creating: boolean) {
     input.email = cleanText(body.email, 200);
     if (input.email && !isValidEmail(input.email)) throw new HttpError(400, "Invalid email address");
   }
-  if (creating || body.password) {
+  // new people: a password, or "email them a link" (they choose their own)
+  if (creating && body.sendInvite === true && !body.password) {
+    if (!cleanText(body.email, 200)) throw new HttpError(400, "Add their email address to send them a link", { email: "Needed for the link" });
+    input.passwordHash = await unusablePasswordHash();
+  } else if (creating || body.password) {
     const problem = validateNewPassword(body.password);
     if (problem) throw new HttpError(400, problem);
     input.passwordHash = await hashPassword(String(body.password));
@@ -113,7 +119,13 @@ export async function createUserHandler(req: Request, res: Response) {
       });
     }
   }
-  res.status(201).json({ message: "User created", user: withAccess(user), directory });
+  // their welcome email with a "set your password" link
+  let invited = false;
+  if (body.sendInvite === true) {
+    invited = await sendPasswordLink(user, "invite");
+    if (invited) await audit(req, { action: "password_link", entity: "user", recordId: user._id, changes: { purpose: "invite" } });
+  }
+  res.status(201).json({ message: "User created", user: withAccess(user), directory, invited });
 }
 
 export async function updateUserHandler(req: Request, res: Response) {
@@ -142,6 +154,20 @@ export async function updateUserHandler(req: Request, res: Response) {
   }
   await audit(req, { action: "update", entity: "user", recordId: id, changes: auditableUser(input, req.body?.appAccess) });
   res.json({ message: "User updated", user: user && withAccess(user) });
+}
+
+// POST /users/:id/password-link: email them a link to choose a password
+// (a welcome link if they never signed in, otherwise a reset link)
+export async function sendPasswordLinkHandler(req: Request, res: Response) {
+  const person = await getUserById(param(req, "id"));
+  if (!person) throw new HttpError(404, "User not found");
+  if (!person.email) throw new HttpError(400, "They have no email address: add one first");
+  if (!person.isActive) throw new HttpError(400, "Their account is disabled");
+  if (!(await mailEnabled())) throw new HttpError(400, "Set up email first (Administration → Email)");
+  const purpose = person.lastLoginAt ? "reset" : "invite";
+  if (!(await sendPasswordLink(person, purpose))) throw new HttpError(429, "A few links were sent in the last hour: try again later");
+  await audit(req, { action: "password_link", entity: "user", recordId: person._id, changes: { purpose } });
+  res.json({ message: `A link to choose a password was emailed to ${person.email}` });
 }
 
 export async function deleteUserHandler(req: Request, res: Response) {

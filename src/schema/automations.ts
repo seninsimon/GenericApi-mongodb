@@ -8,6 +8,8 @@ import { getSchema } from "./schemaRepo.js";
 import { pickDisplayField } from "./columns.js";
 import { ME, TODAY } from "./columns.js";
 import { applyFormulas } from "./formula.js";
+import { emailNotifications } from "../mail/notifications.js";
+import { emitChange, emitNotification } from "../live/events.js";
 
 // After a record is saved (in the same transaction):
 //  1. built-in: people newly picked in a User column are told ("Asha assigned you")
@@ -52,7 +54,7 @@ const throughLink = async (schema: TableSchema, who: string, schemaOf: SchemaOf 
 
 // People who can edit every record of the table (not just their own): its
 // managers. With none yet, the admins, so requests never go unseen.
-async function managersOf(tableName: string, client: pg.PoolClient) {
+export async function managersOf(tableName: string, client: pg.PoolClient) {
   const { rows } = await query<{ _id: string }>(
     `SELECT DISTINCT u._id FROM users u
      JOIN roles r ON r._id = u.role_id OR r._id IN (SELECT role_id FROM user_roles WHERE user_id = u._id)
@@ -137,14 +139,24 @@ const today = () => {
 export async function notify(
   client: pg.PoolClient,
   userIds: string[],
-  n: { title: string; body?: string; tableName?: string; recordId?: string; actor?: string }
+  n: { title: string; body?: string; tableName?: string; recordId?: string; actor?: string },
+  // email: false = the bell only (e.g. "your import finished")
+  opts: { email?: boolean } = {}
 ) {
   const ids = [...new Set(userIds)].filter((id) => id && id !== n.actor);
   if (!ids.length) return;
-  await query(
+  const { rows } = await query<{ _id: string; user_id: string }>(
     `INSERT INTO notifications (user_id, title, body, table_name, record_id, actor)
-     SELECT u._id, $2, $3, $4, $5, $6 FROM users u WHERE u._id = ANY($1::text[]) AND u.is_active`,
+     SELECT u._id, $2, $3, $4, $5, $6 FROM users u WHERE u._id = ANY($1::text[]) AND u.is_active
+     RETURNING _id, user_id`,
     [ids, n.title.slice(0, 300), (n.body ?? "").slice(0, 1000), n.tableName ?? null, n.recordId ?? null, n.actor ?? null],
+    client
+  );
+  // and by email, for people who want it (see mail/notifications.ts); the bell at once
+  if (opts.email !== false) await emailNotifications(client, rows, n);
+  await emitNotification(
+    rows.map((r) => r.user_id),
+    n,
     client
   );
 }
@@ -168,6 +180,8 @@ export async function afterSave(
   const title = nameOf(schema, after);
   const table = schema.tableName.replace(/_/g, " ");
   const actorName = actor.fullName || actor.username;
+  // open screens of this table: "Hana changed this · Refresh"
+  await emitChange(schema.tableName, recordId, actor, client);
 
   // 1. "assigned you": newly picked in a User column
   for (const column of schema.columns.filter((c) => c.type === "user")) {
@@ -192,14 +206,20 @@ export async function afterSave(
     const fires =
       a.trigger.when === "created"
         ? before === null
-        : before !== null &&
-          JSON.stringify(before[a.trigger.column] ?? null) !== JSON.stringify(after[a.trigger.column] ?? null) &&
-          (!a.trigger.to || ([] as unknown[]).concat(after[a.trigger.column] ?? []).includes(a.trigger.to));
+        : before === null
+          ? // a new record "becomes" what it's created with: a ticket created
+            // as Urgent fires "Priority becomes Urgent"
+            Boolean(a.trigger.to) && ([] as unknown[]).concat(after[a.trigger.column] ?? []).includes(a.trigger.to)
+          : JSON.stringify(before[a.trigger.column] ?? null) !== JSON.stringify(after[a.trigger.column] ?? null) &&
+            (!a.trigger.to || ([] as unknown[]).concat(after[a.trigger.column] ?? []).includes(a.trigger.to));
     if (!fires) continue;
     for (const action of a.actions) {
       if (action.do === "set") {
         const column = schema.columns.find((c) => c.name === action.column);
         if (!column) continue;
+        // on a new record, only fill what's still empty (a typed "Paid on" stays)
+        const current = after[column.name];
+        if (before === null && current !== null && current !== undefined && current !== "" && !(Array.isArray(current) && !current.length)) continue;
         const v = action.value === TODAY ? today() : action.value === ME ? (column.multiple ? [actor._id] : actor._id) : action.value;
         patch[column.name] = v;
       } else {
@@ -225,7 +245,7 @@ export async function afterSave(
 }
 
 // The people an automation tells (see the "who" kinds above).
-async function recipients(schema: TableSchema, who: string, after: RecordData, createdBy: string | null, client: pg.PoolClient) {
+export async function recipients(schema: TableSchema, who: string, after: RecordData, createdBy: string | null, client: pg.PoolClient) {
   if (who === CREATOR) return idsIn(createdBy);
   if (who === MANAGERS) return managersOf(schema.tableName, client);
   if (!who.includes(".")) return idsIn(after[who]);

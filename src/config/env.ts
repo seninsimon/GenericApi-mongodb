@@ -53,6 +53,10 @@ export const env = {
   // run the background job worker inside the API process (handy in development;
   // in docker a separate "worker" service runs it)
   runWorker: bool("RUN_WORKER", true),
+
+  // Email is set up in the app (Administration → Email). MAIL_TRANSPORT=memory
+  // keeps emails in memory instead of sending them (tests).
+  mailTransport: str("MAIL_TRANSPORT", "smtp") as "smtp" | "memory",
 };
 
 export type Env = typeof env;

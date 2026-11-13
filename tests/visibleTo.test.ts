@@ -82,7 +82,7 @@ describe('"Visible to" several departments', async () => {
     const start = await asha.post(`/api/table/${projects}/export`);
     await drainJobs();
     const lines = (await asha.get(`/api/jobs/${start.body.job._id}/download`)).text.replace(/^﻿/, "").trim().split(/\r?\n/);
-    expect(lines[0]).toBe("Name,Visible to,Created by");
+    expect(lines[0]).toBe("Name,Visible to,Created by,ID");
     expect(lines.find((l) => l.startsWith("Launch v2"))).toContain(`${eng.name}; ${ops.name}`);
 
     const csv = ["Name,Visible to", `Shared,${eng.name}; ${design.name.toUpperCase()}`, `Not mine,${design.name}`, "Unknown,Nowhere"].join("\n");

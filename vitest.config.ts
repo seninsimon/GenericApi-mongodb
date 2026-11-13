@@ -18,6 +18,8 @@ export default defineConfig({
       ADMIN_PASSWORD: "admin-test-pass",
       UPLOAD_MAX_MB: "1",
       LOG_LEVEL: "silent",
+      // emails go to an in-memory mailbox (src/mail/mailer.ts), never out
+      MAIL_TRANSPORT: "memory",
     },
   },
 });

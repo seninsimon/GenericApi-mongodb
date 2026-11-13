@@ -9,7 +9,7 @@ import { parseFilters } from "../schema/filters.js";
 import { getSchema } from "../schema/schemaRepo.js";
 import { storage } from "../storage.js";
 import type { CurrentUser, StoredRecord, TableSchema } from "../types.js";
-import { CREATED_BY_HEADER, DEPARTMENT_HEADER, formatCell } from "./csv.js";
+import { CREATED_BY_HEADER, DEPARTMENT_HEADER, formatCell, ID_HEADER } from "./csv.js";
 
 // Look up display labels for the relation values in one batch, limited to the
 // records the user could see themselves.
@@ -60,6 +60,8 @@ export async function runExport(job: Job) {
     ...schema.columns.map((c) => c.label || c.name),
     ...(withDepartment ? [DEPARTMENT_HEADER] : []),
     CREATED_BY_HEADER,
+    // keep it to change these records by importing the file again
+    ID_HEADER,
   ];
   const departments = schema.columns.some((c) => c.type === "department") ? await departmentNames() : new Map<string, string>();
   // BOM so Excel opens UTF-8 correctly
@@ -96,6 +98,7 @@ export async function runExport(job: Job) {
           ),
           ...(withDepartment ? [visibleTo(record)] : []),
           people.label(record.createdBy),
+          record._id,
         ]);
       }
       rows += batch.length;

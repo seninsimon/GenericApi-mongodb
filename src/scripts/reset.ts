@@ -34,6 +34,9 @@ const SYSTEM_TABLES = [
   "installed_apps",
   "notifications",
   "automations",
+  "email_outbox",
+  "password_tokens",
+  "app_state",
   "schema_migrations",
 ];
 

@@ -2,7 +2,7 @@ import busboy from "busboy";
 import type { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
-import { allowedDepartments, isAdmin } from "../auth/access.js";
+import { allowedDepartments, can, isAdmin } from "../auth/access.js";
 import { env } from "../config/env.js";
 import { HttpError, intParam, param } from "../lib/http.js";
 import { currentUser } from "../middleware/auth.js";
@@ -31,7 +31,11 @@ export async function startExportHandler(req: Request, res: Response) {
 // POST /api/table/:collection/import (multipart: "file" CSV, optional "departmentId")
 export async function startImportHandler(req: Request, res: Response) {
   const user = currentUser(req);
-  const schema = await loadTable(req, "create");
+  // adding records, or changing them (rows with an ID): either permission will do
+  const schema = await loadTable(req, "view");
+  if (!can(user, schema, "create") && !can(user, schema, "edit")) {
+    throw new HttpError(403, "You don't have permission to add or change records in this table");
+  }
   if (!req.is("multipart/form-data")) throw new HttpError(400, "Expected multipart/form-data");
 
   const jobId = randomUUID();

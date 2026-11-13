@@ -3,7 +3,7 @@ import type { AppBlueprint } from "../types.js";
 
 export const helpdesk: AppBlueprint = {
   key: "helpdesk",
-  version: 2, // 2: automations
+  version: 3, // 2: automations; 3: managers hear about urgent tickets
   name: "Helpdesk",
   description: "Customer or internal tickets with priority, status and an assignee.",
   icon: "IconLifebuoy",
@@ -32,6 +32,12 @@ export const helpdesk: AppBlueprint = {
     },
   ],
   automations: [
+    {
+      table: "tickets",
+      name: "Tell the managers about urgent tickets",
+      trigger: { when: "changed", column: "priority", to: "Urgent" },
+      actions: [{ do: "notify", who: "$managers", message: "Urgent ticket" }],
+    },
     {
       table: "tickets",
       name: "When resolved: note the date and tell the requester",

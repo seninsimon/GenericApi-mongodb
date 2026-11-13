@@ -16,6 +16,10 @@ import type { Column } from "../types.js";
 export const DEPARTMENT_HEADER = "Visible to";
 export const LEGACY_DEPARTMENT_HEADER = "Department";
 export const CREATED_BY_HEADER = "Created by";
+// the record's ID in exports: keep it to update that record when importing
+export const ID_HEADER = "ID";
+// in the "rows to fix" file: why the row didn't import (skipped on import)
+export const PROBLEM_HEADER = "Problem";
 export const LIST_SEPARATOR = ";";
 
 // Spreadsheet apps run cells starting with = + - @ as formulas; prefix such

@@ -123,7 +123,7 @@ describe('"User" columns and "Created by"', async () => {
     const job = (await world.user.get(`/api/jobs/${start.body.job._id}`)).body;
     // "Created by" isn't reported as an unknown column
     expect(job.result).toMatchObject({ inserted: 2, failed: 1 });
-    expect(job.result.errors).toEqual([{ row: 4, message: 'Assignee: no active user "Nobody Here"' }]);
+    expect(job.result.errors).toEqual([{ row: 4, message: 'Assignee: there\'s no active person "Nobody Here". Use their username or full name' }]);
 
     const rows = (await world.user.get(`/api/table/${t}?search=By%20`)).body.data;
     expect(rows.map((r: { title: string; assignee: string; _createdBy: string }) => [r.title, r.assignee, r._createdBy]).sort()).toEqual([
@@ -134,8 +134,8 @@ describe('"User" columns and "Created by"', async () => {
     const exportJob = (await world.user.post(`/api/table/${t}/export`, { search: "By name" })).body.job;
     await drainJobs();
     const lines = (await world.user.get(`/api/jobs/${exportJob._id}/download`)).text.replace(/^﻿/, "").trim().split(/\r?\n/);
-    expect(lines[0]).toBe("Title,Assignee,Reviewers,Created by");
-    expect(lines[1]).toBe(`By name,Chris Colleague,${world.username},${world.username}`);
+    expect(lines[0]).toBe("Title,Assignee,Reviewers,Created by,ID");
+    expect(lines[1].startsWith(`By name,Chris Colleague,${world.username},${world.username},`)).toBe(true);
   });
 
   it("fills in Created by for older records from the audit log (migration 003)", async () => {

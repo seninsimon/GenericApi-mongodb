@@ -136,6 +136,8 @@ export interface CurrentUser {
   email: string;
   phone: string;
   isActive: boolean;
+  // "Email me": now (right away), daily (in the morning summary) or never
+  emailPref: "now" | "daily" | "never";
   lastLoginAt: Date | null;
   createdAt: Date;
   updatedAt: Date;

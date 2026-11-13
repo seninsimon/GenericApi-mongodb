@@ -94,6 +94,17 @@ describe("App catalog", () => {
         await expect(normalizeAutomation({ tableName: a.table, columns } as never, a, schemaOf as never), `${app.key}: ${a.name}`).resolves.toBeTruthy();
       }
     }
+    // morning-summary reminders name real columns, and someone to tell
+    for (const app of APPS) {
+      for (const r of app.reminders ?? []) {
+        const columns = columnsByKey.get(fullKey(app, r.table));
+        expect(columns, `${app.key}: ${r.label}`).toBeTruthy();
+        const has = (name: string, type?: string) => columns!.some((c) => c.name === name && (!type || c.type === type));
+        for (const f of r.filters) expect(has(f.field), `${app.key}: ${r.label}: ${f.field}`).toBe(true);
+        if (r.date) expect(has(r.date, "date"), `${app.key}: ${r.label}: ${r.date}`).toBe(true);
+        expect(r.who === "$managers" || has(r.who.split(".")[0]), `${app.key}: ${r.label}: ${r.who}`).toBe(true);
+      }
+    }
     for (const bundle of BUNDLES) for (const key of bundle.apps) expect(keys.has(key), `${bundle.key}: ${key}`).toBe(true);
     // a bundle key that's also an app key would install the whole bundle
     for (const bundle of BUNDLES) expect(keys.has(bundle.key), `bundle ${bundle.key} clashes with an app`).toBe(false);

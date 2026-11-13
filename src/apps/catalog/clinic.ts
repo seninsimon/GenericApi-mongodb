@@ -104,6 +104,15 @@ export const clinic: AppBlueprint = {
       ],
     },
   ],
+  reminders: [
+    {
+      table: "appointments",
+      label: "Your appointments tomorrow",
+      filters: [{ field: "date", op: "eq", value: "$today+1" }, { field: "status", op: "in", value: ["Booked"] }],
+      who: "doctor",
+      date: "date",
+    },
+  ],
   dashboard: {
     tiles: [
       { label: "Appointments today", table: "appointments", filters: [{ field: "date", op: "eq", value: "$today" }] },

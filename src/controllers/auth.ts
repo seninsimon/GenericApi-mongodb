@@ -1,3 +1,6 @@
+import { linkOwner, sendPasswordLink, usePasswordLink } from "../auth/passwordLinks.js";
+import { query } from "../db/pool.js";
+import { mailEnabled } from "../mail/mailer.js";
 import type { Request, Response } from "express";
 import { hashPassword, validateNewPassword, verifyDummyPassword, verifyPassword } from "../auth/password.js";
 import { clearFailures, isThrottled, recordFailure, throttleKey } from "../auth/throttle.js";
@@ -53,8 +56,12 @@ export const me = (req: Request, res: Response) => res.json({ user: currentUser(
 
 export async function updateProfile(req: Request, res: Response) {
   const user = currentUser(req);
-  const { fullName, email, phone } = req.body ?? {};
-  const update: { fullName?: string; email?: string; phone?: string } = {};
+  const { fullName, email, phone, emailPref } = req.body ?? {};
+  const update: { fullName?: string; email?: string; phone?: string; emailPref?: "now" | "daily" | "never" } = {};
+  if (emailPref !== undefined) {
+    if (!["now", "daily", "never"].includes(emailPref)) throw new HttpError(400, "Choose how often to get emails");
+    update.emailPref = emailPref;
+  }
 
   if (fullName !== undefined) update.fullName = cleanText(fullName, 100);
   if (phone !== undefined) update.phone = cleanText(phone, 30);
@@ -84,4 +91,43 @@ export async function changePassword(req: Request, res: Response) {
   await audit(req, { action: "password_change", entity: "user", recordId: user._id });
 
   res.json({ message: "Password changed" });
+}
+
+/* ---------------- password links (email) ---------------- */
+
+// POST /auth/forgot { login }: a username or email address. The answer is the
+// same whether or not the account exists (nobody can probe for accounts).
+export async function forgotPassword(req: Request, res: Response) {
+  const login = cleanText(req.body?.login, 200);
+  if (!login) throw new HttpError(400, "Enter your username or email address");
+  if (!(await mailEnabled())) {
+    throw new HttpError(503, "Email isn't set up here, so ask an admin to reset your password");
+  }
+  const { rows } = await query<{ _id: string }>(
+    `SELECT _id FROM users WHERE is_active AND (lower(username) = lower($1) OR (email <> '' AND lower(email) = lower($1))) LIMIT 2`,
+    [login]
+  );
+  // an email address shared by two accounts: don't guess which
+  if (rows.length === 1) {
+    const person = await getUserById(rows[0]._id);
+    if (person) {
+      const sent = await sendPasswordLink(person, "reset").catch(() => false);
+      if (sent) await audit(req, { action: "password_link", entity: "user", recordId: person._id, changes: { purpose: "reset" } });
+    }
+  }
+  res.json({ message: "If that account has an email address, a link to choose a new password is on its way. Check your inbox (and spam folder)." });
+}
+
+// GET /auth/password-link?token=: who the link is for (the page greets them)
+export async function passwordLinkInfo(req: Request, res: Response) {
+  const owner = typeof req.query.token === "string" ? await linkOwner(req.query.token) : null;
+  if (!owner) throw new HttpError(404, "This link has expired or was already used");
+  res.json(owner);
+}
+
+// POST /auth/set-password { token, password }
+export async function setPasswordFromLink(req: Request, res: Response) {
+  const userId = await usePasswordLink(String(req.body?.token ?? ""), req.body?.password);
+  await audit(req, { action: "password_change", entity: "user", recordId: userId, changes: { by: "email link" } });
+  res.json({ message: "Your password is set. You can sign in now." });
 }

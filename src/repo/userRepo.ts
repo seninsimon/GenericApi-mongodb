@@ -10,7 +10,7 @@ const hashToken = (token: string) => createHash("sha256").update(token).digest("
 // user + main role + extra (app) roles + departments
 const USER_SELECT = `
   SELECT u._id, u.username, u.full_name, u.email, u.phone, u.is_active,
-         u.last_login_at, u.created_at, u.updated_at,
+         u.last_login_at, u.created_at, u.updated_at, u.email_pref,
          r._id AS role_id, r.name AS role_name, r.is_admin, r.permissions,
          COALESCE((
            SELECT jsonb_agg(jsonb_build_object('_id', x._id, 'permissions', x.permissions, 'appKey', x.app_key, 'appLevel', x.app_level))
@@ -36,6 +36,7 @@ type UserRow = {
   last_login_at: Date | null;
   created_at: Date;
   updated_at: Date;
+  email_pref: string;
   role_id: string;
   role_name: string;
   is_admin: boolean;
@@ -51,6 +52,7 @@ const toUser = (row: UserRow): CurrentUser => ({
   email: row.email,
   phone: row.phone,
   isActive: row.is_active,
+  emailPref: (row.email_pref ?? "now") as CurrentUser["emailPref"],
   lastLoginAt: row.last_login_at,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -160,6 +162,7 @@ export interface UserInput {
   passwordHash?: string;
   roleId?: string;
   isActive?: boolean;
+  emailPref?: "now" | "daily" | "never";
   departmentIds?: string[];
   // extra roles (app roles); undefined = keep
   extraRoleIds?: string[];
@@ -221,6 +224,7 @@ export async function updateUser(id: string, data: UserInput) {
     ["passwordHash", "password_hash"],
     ["roleId", "role_id"],
     ["isActive", "is_active"],
+    ["emailPref", "email_pref"],
   ];
 
   await withTransaction(async (client) => {

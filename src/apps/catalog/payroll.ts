@@ -3,7 +3,7 @@ import type { AppBlueprint } from "../types.js";
 
 export const payroll: AppBlueprint = {
   key: "payroll",
-  version: 2, // 2: approval steps
+  version: 3, // 2: approval steps; 3: the employee hears when a payslip is ready and paid
   name: "Payroll",
   description: "Monthly payslips with gross and net pay worked out. Staff see only their own payslips.",
   icon: "IconCash",
@@ -36,6 +36,18 @@ export const payroll: AppBlueprint = {
       name: "When paid: note the date",
       trigger: { when: "changed", column: "status", to: "Paid" },
       actions: [{ do: "set", column: "paid_on", value: "today" }],
+    },
+    {
+      table: "payslips",
+      name: "Tell the employee their payslip is ready",
+      trigger: { when: "changed", column: "status", to: "Approved" },
+      actions: [{ do: "notify", who: "employee.account", message: "Your payslip is ready" }],
+    },
+    {
+      table: "payslips",
+      name: "Tell the employee they were paid",
+      trigger: { when: "changed", column: "status", to: "Paid" },
+      actions: [{ do: "notify", who: "employee.account", message: "Your salary was paid" }],
     },
   ],
   // through "Employee" (whose Login account is them): their own payslips

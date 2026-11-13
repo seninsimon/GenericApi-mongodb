@@ -79,6 +79,7 @@ export const inventory: AppBlueprint = {
       formula("low_stock", "Low stock", 'IF({stock} <= {reorder_level} and {reorder_level} > 0, "Low", "")'),
     ],
   },
+  reminders: [{ table: "products.products", label: "Products low on stock", filters: [{ field: "low_stock", op: "eq", value: "Low" }], who: "$managers" }],
   dashboard: {
     tiles: [
       { label: "Products low on stock", table: "products.products", filters: [{ field: "low_stock", op: "eq", value: "Low" }] },

@@ -2,6 +2,8 @@ import pg from "pg";
 import { pruneLoginAttempts } from "../auth/throttle.js";
 import { env } from "../config/env.js";
 import { logger } from "../lib/logger.js";
+import { processOutbox, pruneOutbox } from "../mail/outbox.js";
+import { runMorningSummary } from "../mail/summary.js";
 import { jobsProcessed } from "../lib/metrics.js";
 import {
   claimNextJob,
@@ -20,6 +22,7 @@ import { runImport } from "./importJob.js";
 const HANDLERS = { export: runExport, import: runImport } as const;
 const POLL_MS = 5_000;
 const HOUSEKEEPING_MS = 10 * 60_000;
+const MAIL_MS = 5_000;
 
 // Run one job to completion and record the outcome.
 export async function runJob(job: Job): Promise<void> {
@@ -52,6 +55,7 @@ async function housekeeping() {
     await recoverStaleJobs();
     await pruneSessions();
     await pruneLoginAttempts();
+    await pruneOutbox();
     for (const job of await expiredJobFiles(env.jobFileRetentionDays)) {
       for (const key of [job.file_key, job.import_key]) {
         if (key) await storage.delete(key).catch(() => {});
@@ -99,6 +103,23 @@ export async function startWorker(): Promise<() => Promise<void>> {
   await housekeeping();
   const housekeepingTimer = setInterval(housekeeping, HOUSEKEEPING_MS);
 
+  // email: send the outbox every few seconds; the morning summary once a day
+  let mailing = false;
+  const mailTimer = setInterval(async () => {
+    if (mailing) return;
+    mailing = true;
+    try {
+      await runMorningSummary();
+      while ((await processOutbox()) > 0) {
+        // more may be due
+      }
+    } catch (err) {
+      logger.error({ err }, "email sending failed");
+    } finally {
+      mailing = false;
+    }
+  }, MAIL_MS);
+
   const loop = (async () => {
     while (running) {
       let job: Job | null = null;
@@ -116,6 +137,7 @@ export async function startWorker(): Promise<() => Promise<void>> {
   return async () => {
     running = false;
     clearInterval(housekeepingTimer);
+    clearInterval(mailTimer);
     (wake as (() => void) | null)?.();
     await loop;
     await (listener as pg.Client | null)?.end().catch(() => {});

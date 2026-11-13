@@ -79,6 +79,15 @@ export const billing: AppBlueprint = {
     },
     { ...lines("quote_lines", "quote_lines", "Quote lines", "quotes"), optional: true },
   ],
+  reminders: [
+    {
+      table: "invoices",
+      label: "Overdue invoices",
+      filters: [{ field: "due", op: "before", value: "$today" }, { field: "balance", op: "gt", value: 0 }, { field: "status", op: "notIn", value: ["Draft", "Cancelled"] }],
+      who: "$managers",
+      date: "due",
+    },
+  ],
   dashboard: {
     tiles: [
       { label: "Invoices not fully paid", table: "invoices", filters: [{ field: "balance", op: "gt", value: 0 }, { field: "status", op: "notIn", value: ["Draft", "Cancelled"] }] },

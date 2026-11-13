@@ -41,6 +41,15 @@ export const assets: AppBlueprint = {
       ],
     },
   ],
+  reminders: [
+    {
+      table: "assets",
+      label: "Warranties ending in the next 30 days",
+      filters: [{ field: "warranty_until", op: "between", value: "$today", value2: "$today+30" }],
+      who: "$managers",
+      date: "warranty_until",
+    },
+  ],
   dashboard: {
     tiles: [{ label: "Assets needing repair", table: "assets", filters: [{ field: "condition", op: "in", value: ["Needs repair"] }] }],
     breakdown: { label: "Assets by category", table: "assets", column: "category" },

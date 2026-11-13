@@ -7,10 +7,12 @@ import { departmentOptionsHandler, userOptionsHandler } from "./controllers/peop
 import * as jobs from "./controllers/jobs.js";
 import * as records from "./controllers/records.js";
 import * as apps from "./controllers/apps.js";
+import * as email from "./controllers/email.js";
 import * as notifications from "./controllers/notifications.js";
 import * as schema from "./controllers/schema.js";
 import { handle } from "./lib/http.js";
 import { requireAdmin, requireAuth } from "./middleware/auth.js";
+import { eventsHandler } from "./live/events.js";
 
 // All /api routes. Record access is checked per table (role permissions +
 // departments) inside the record/job controllers.
@@ -22,8 +24,14 @@ const adminOnly = [requireAuth, requireAdmin];
 r.post("/auth/login", handle(auth.login));
 r.post("/auth/logout", handle(auth.logout));
 r.get("/auth/me", requireAuth, handle(auth.me));
+// live updates for this browser tab (Server-Sent Events)
+r.get("/events", requireAuth, eventsHandler);
 r.put("/auth/profile", requireAuth, handle(auth.updateProfile));
 r.put("/auth/password", requireAuth, handle(auth.changePassword));
+// "Forgot password?" and the "set your password" links from emails (no sign-in)
+r.post("/auth/forgot", handle(auth.forgotPassword));
+r.get("/auth/password-link", handle(auth.passwordLinkInfo));
+r.post("/auth/set-password", handle(auth.setPasswordFromLink));
 
 // ---- people picker (any logged-in user: names only) ----
 r.get("/users/options", requireAuth, handle(userOptionsHandler));
@@ -35,6 +43,7 @@ r.get("/users/app-access", adminOnly, handle(admin.getAppAccessOptions));
 r.post("/users", adminOnly, handle(admin.createUserHandler));
 r.put("/users/:id", adminOnly, handle(admin.updateUserHandler));
 r.delete("/users/:id", adminOnly, handle(admin.deleteUserHandler));
+r.post("/users/:id/password-link", adminOnly, handle(admin.sendPasswordLinkHandler));
 
 r.get("/roles", adminOnly, handle(admin.getRoles));
 r.post("/roles", adminOnly, handle(admin.createRoleHandler));
@@ -65,6 +74,11 @@ r.delete("/schema/:table/automations/:id", adminOnly, handle(notifications.delet
 // the bell: your own notifications
 r.get("/notifications", requireAuth, handle(notifications.listNotificationsHandler));
 r.post("/notifications/read", requireAuth, handle(notifications.readNotificationsHandler));
+
+// email: settings, test, the last emails (admin)
+r.get("/email", adminOnly, handle(email.getEmailHandler));
+r.put("/email", adminOnly, handle(email.saveEmailHandler));
+r.post("/email/test", adminOnly, handle(email.testEmailHandler));
 
 // apps (Projects, HR, ...): catalog, preview, install, remove
 r.get("/apps", adminOnly, handle(apps.listAppsHandler));
