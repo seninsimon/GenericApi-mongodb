@@ -52,7 +52,7 @@ async function previewOrSave<T>(req: Request, res: Response, run: () => Promise<
 }
 import { checkChoices, checkRelations, checkRequired, coerceValues } from "../schema/validateRecord.js";
 import { deleteUploads } from "../storage.js";
-import type { Action, CurrentUser, RecordData, TableSchema } from "../types.js";
+import type { Action, Column, CurrentUser, RecordData, TableSchema } from "../types.js";
 import { htmlToText } from "../lib/text.js";
 import { emitChange } from "../live/events.js";
 
@@ -366,6 +366,69 @@ export async function bulkDeleteHandler(req: Request, res: Response) {
     )
   );
   res.json({ message: `${deleted.length} record(s) deleted`, deleted: deleted.length, notFound: ids.length - deleted.length });
+}
+
+// Fields that can be set on many records at once: plain values, choices,
+// people and links. Not worked-out ones (formulas, totals, auto-numbers),
+// files, rich text, or a line item's link to its parent.
+export const BULK_UPDATE_TYPES = ["text", "number", "date", "boolean", "relation", "user", "department", "choice", "textarea"];
+const bulkUpdatable = (column: Column) => BULK_UPDATE_TYPES.includes(column.type) && !column.inline;
+
+// POST /table/:collection/bulk-update { ids, field, value } (max 500)
+// One field set to one value (null = cleared) on the selected records, with
+// the same rules as editing one: permissions, own records only, approvals,
+// required fields, choices, links; then formulas, totals, automations, the
+// audit log and live updates. Each record is saved on its own, so one that
+// can't be changed is skipped (and listed) without stopping the others.
+export async function bulkUpdateHandler(req: Request, res: Response) {
+  const user = currentUser(req);
+  const schema = await loadTable(req, "edit");
+  const ids = toIdList(req.body?.ids);
+  if (!ids.length) throw new HttpError(400, "Select at least one record");
+  if (ids.length > 500) throw new HttpError(400, "At most 500 records at a time");
+  const field = typeof req.body?.field === "string" ? req.body.field : "";
+  const column = schema.columns.find((c) => c.name === field);
+  if (!column || !bulkUpdatable(column)) throw new HttpError(400, "Choose a field that can be changed for many records");
+
+  const raw = req.body?.value;
+  const clearing = raw === null || raw === undefined || raw === "" || (Array.isArray(raw) && !raw.length);
+  if (clearing && column.required) throw new HttpError(400, `${column.label || column.name} is required, so it can't be cleared`);
+  const { values, errors } = coerceValues(schema, { [column.name]: clearing ? null : raw });
+  throwIfErrors(errors);
+
+  let updated = 0;
+  const skipped: { id: string; message: string }[] = [];
+  for (const id of ids) {
+    try {
+      await withTransaction(async (client) => {
+        const current = await lockRecord(schema.tableName, id, recordScope(user, schema), client);
+        if (!current) throw new HttpError(404, "Not found, or you can't edit it");
+        const own = { ...values };
+        await fillFromUsers(schema, own, current.data);
+        await keepItYours(schema, own, current.data, user);
+        await checkNotApprovingOwn(schema, own, current.data, user);
+        const merged: RecordData = { ...current.data, ...own };
+        throwIfErrors({ ...checkRequired(schema, merged), ...checkChoices(schema, own, current.data, user) });
+        throwIfErrors(await checkRelations(user, schema, own, current.data));
+        const changes = diffRecord(current.data, merged);
+        if (!Object.keys(changes).length) return; // already that value
+        await updateRecord(schema.tableName, id, own, { scope: ALL_RECORDS }, client);
+        await applyFormulas(schema, [id], client);
+        await refreshParents(schema.tableName, [current.data, merged], client);
+        await afterSave(schema, id, current.data, merged, current.createdBy ?? null, user, client);
+        await audit(req, { action: "update", entity: "record", tableName: schema.tableName, recordId: id, changes: { ...changes, _bulk: true } }, client);
+      });
+      updated++;
+    } catch (error) {
+      if (!(error instanceof HttpError)) throw error;
+      skipped.push({ id, message: error.message });
+    }
+  }
+  res.json({
+    message: skipped.length ? `${updated} updated, ${skipped.length} not changed` : `${updated} record(s) updated`,
+    updated,
+    skipped,
+  });
 }
 
 export async function createHandler(req: Request, res: Response) {

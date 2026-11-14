@@ -129,6 +129,7 @@ r.post("/table/:collection", requireAuth, handle(records.createHandler));
 r.get("/table/:collection/options", requireAuth, handle(records.optionsHandler));
 r.post("/table/:collection/export", requireAuth, handle(jobs.startExportHandler));
 r.post("/table/:collection/bulk-delete", requireAuth, handle(records.bulkDeleteHandler));
+r.post("/table/:collection/bulk-update", requireAuth, handle(records.bulkUpdateHandler));
 r.post("/table/:collection/import", requireAuth, handle(jobs.startImportHandler));
 r.get("/table/:collection/:id", requireAuth, handle(records.getHandler));
 // comments on a record (anyone who can see it)
